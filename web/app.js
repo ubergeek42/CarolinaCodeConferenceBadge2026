@@ -9,9 +9,25 @@ import { SIZE, grayToBMP, qrToBMP } from "./bmp.js";
 import { glyph, GLYPH_W, GLYPH_H, chooseScale } from "./font.js";
 import { makeZip } from "./zip.js";
 
-// Same minimum set flash.py copies. ProfileCard draws its captions with
-// terminalio.FONT, which is frozen into the firmware, so adafruit_bitmap_font
-// is deliberately absent.
+// First-party libraries ProfileCard imports directly, and the module a fresh
+// badge starts life able to share. These are ours and they version with
+// code.py: a badge given the new card without them fails to import at boot,
+// which is precisely the bug this list exists to prevent. None of them ships
+// on a stock badge, so all of them are always written.
+const BADGE_LIBS = [
+  "badgenet.py",                // radio + peer table; badgexfer builds on it
+  "badgemod.py",                // runs received modules in the background
+  "badgexfer.py",               // module transfer over ESP-NOW
+  "badgestats.py",              // the proximity log in nvm
+];
+
+// The .py autoloads and runs; the .mod is the compressed blob that goes on the
+// air, which the badge cannot build itself (its zlib is decompress-only).
+const MOD_FILES = ["syncflash.py", "syncflash.mod"];
+
+// Same minimum set flash.py copies, and the only ones a stock badge already
+// has. ProfileCard draws its captions with terminalio.FONT, which is frozen
+// into the firmware, so adafruit_bitmap_font is deliberately absent.
 const LIB_FILES = [
   "neopixel.mpy",
   "adafruit_pixelbuf.mpy",
@@ -236,6 +252,8 @@ async function build() {
     ["samples/ProfileCard/code.py", "../samples/ProfileCard/code.py"],
     ["samples/Launcher/code.py", "../samples/Launcher/code.py"],
     ...LIB_FILES.map((n) => [`lib/${n}`, `../lib/${n}`]),
+    ...BADGE_LIBS.map((n) => [`lib/${n}`, `../lib/${n}`]),
+    ...MOD_FILES.map((n) => [`mods/${n}`, `../mods/${n}`]),
   ];
   const fetched = await Promise.all(wanted.map(([, url]) => fetchBinary(url)));
   wanted.forEach(([dest], i) => files.set(dest, fetched[i]));

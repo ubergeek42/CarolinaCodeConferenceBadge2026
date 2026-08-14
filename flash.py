@@ -63,6 +63,24 @@ LIB_FILES = (
     "adafruit_imageload/bmp/negative_height_check.mpy",
 )
 
+# First-party libraries ProfileCard imports directly. Unlike the Adafruit
+# bundle above these are ours, they change with code.py, and none of them
+# ships on a stock badge -- so they are always written, never skipped.
+BADGE_LIBS = (
+    "badgenet.py",              # radio + peer table; badgexfer builds on it
+    "badgemod.py",              # runs received modules in the background
+    "badgexfer.py",             # module transfer over ESP-NOW
+    "badgestats.py",            # the proximity log in nvm
+)
+
+# The module a fresh badge starts life able to share. Both forms: the .py is
+# what autoloads and runs, the .mod is the compressed blob that goes on the
+# air, and a badge cannot build one itself (its zlib is decompress-only).
+MOD_FILES = (
+    "syncflash.py",
+    "syncflash.mod",
+)
+
 
 # ------------------------------------------------------------------
 # Finding the badge
@@ -405,6 +423,15 @@ def main():
     for name in LIB_FILES:
         payload.append((os.path.join(HERE, "lib", name), "lib/" + name, False))
 
+    # ProfileCard's own first-party libraries, and the first module to share.
+    # Marked ours, not support: they version with code.py and a stale copy of
+    # one against a new card is a badge that fails to import at boot. Leaving
+    # these out is exactly that bug -- the new code.py imports all four.
+    for name in BADGE_LIBS:
+        payload.append((os.path.join(HERE, "lib", name), "lib/" + name, True))
+    for name in MOD_FILES:
+        payload.append((os.path.join(HERE, "mods", name), "mods/" + name, True))
+
     # The picker is what the shim hands off to, so make sure it exists. Marked
     # as not-ours: a badge that already has one keeps it, however it has been
     # modified. This only restores the ability on a badge that lost it.
@@ -478,7 +505,8 @@ def main():
     else:
         print("\nalready up to date -- nothing needed writing.")
     if written:
-        print("\nSW1/SW2 step through the sides, SW3 toggles the LEDs.")
+        print("\nSW1/SW2 step through the sides. Tap SW3 to listen for code")
+        print("from nearby badges; hold SW3 for the LEDs.")
         print("Your details are in badge_profile.py on the badge -- edit and")
         print("save, CircuitPython reloads instantly.")
 
