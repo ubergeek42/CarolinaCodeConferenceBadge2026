@@ -49,7 +49,9 @@ public/
 │   └── SERIAL_CONSOLE.md     How to open the USB serial console for print().
 │
 ├── img/                      Shared images (BMPs loaded via adafruit_imageload).
-│   └── CarolinaCodeConference.bmp
+│   ├── CarolinaCodeConference.bmp
+│   ├── avatar.bmp            Profile photo for ProfileCard (128x128, 8-bit indexed).
+│   └── qr.bmp                LinkedIn QR for ProfileCard (same format).
 │
 ├── lib/                      CircuitPython libraries the samples import.
 │   ├── adafruit_bitmap_font/
@@ -72,6 +74,8 @@ public/
     ├── LEDLab/               Pattern + palette + speed demo across 16 patterns.
     ├── MorseCode/            Tap Morse code on SW1 and it decodes live on the display.
     ├── Nameplate/            Conference nameplate — large font name + LED patterns.
+    ├── ProfileCard/          Two-sided badge — photo + handle, any button flips to
+    │                         a LinkedIn QR code.
     ├── Weather/              WiFi weather app (ZIP → forecast + LED dashboard).
     └── WiFiScanner/          Live WiFi scanner + signal-strength meter.
 ```
