@@ -2,12 +2,14 @@
 code.py -- ProfileCard: Carolina Code Conference sample
 =======================================================
 A two-sided badge. One side is your photo plus your handle, the
-other is a QR code pointing at your LinkedIn. Press any of the
-three buttons to flip.
+other is a QR code pointing at your LinkedIn. SW1 or SW2 flips.
 
 Controls
 --------
-  SW1 (IO1) / SW2 (IO2) / SW3 (IO43)  -- flip to the other side
+  SW1 (IO1) / SW2 (IO2)  -- flip to the other side
+  SW3 (IO43)             -- LEDs on/off. The NeoPixels are the
+                            biggest current draw on the board, so
+                            turning them off stretches the CR123A.
 
 Both images are pre-rendered BMPs in /img/ -- see README.md for the
 one-liner that converts your own photo and regenerates the QR.
@@ -32,6 +34,10 @@ QR_BMP    = "/img/qr.bmp"
 # Seconds of no button press before the badge flips on its own.
 # Set to 0 for button-only flipping.
 AUTO_FLIP_SECS = 0
+
+# Whether the NeoPixels start lit. SW3 toggles them either way --
+# set this False if you want the badge to boot in low-power mode.
+LEDS_AT_BOOT = True
 # ==============================================================
 
 
@@ -72,7 +78,8 @@ def _btn(pin):
     return b
 
 
-buttons = (_btn(board.IO1), _btn(board.IO2), _btn(board.IO43))
+flip_buttons = (_btn(board.IO1), _btn(board.IO2))
+led_button = _btn(board.IO43)
 
 # Font chip shares the SPI bus -- deselect it so it stays quiet.
 font_cs = digitalio.DigitalInOut(board.IO9)
@@ -172,13 +179,16 @@ display.root_group = scenes[side]
 display.refresh()
 bl.value = True
 
-prev = [b.value for b in buttons]
+prev = [b.value for b in flip_buttons]
+led_prev = led_button.value
 last_flip = time.monotonic()
+leds_on = LEDS_AT_BOOT
 
 print("ProfileCard: %s / %s (handle scale=%d)"
       % (HANDLE, LINKEDIN, choose_scale(HANDLE)))
-print("  press any button to flip; auto-flip %s"
-      % ("off" if AUTO_FLIP_SECS <= 0 else "%ds" % AUTO_FLIP_SECS))
+print("  SW1/SW2 flip, SW3 toggles LEDs (now %s); auto-flip %s"
+      % ("on" if leds_on else "off",
+         "off" if AUTO_FLIP_SECS <= 0 else "%ds" % AUTO_FLIP_SECS))
 
 
 def flip():
@@ -196,24 +206,41 @@ def flip():
 while True:
     now = time.monotonic()
 
-    # Any button, on the press edge. Reading all three and OR-ing the
+    # Flip on the press edge of either front button. OR-ing the two
     # edges means it doesn't matter which one an attendee grabs.
-    values = [btn.value for btn in buttons]
+    values = [btn.value for btn in flip_buttons]
     pressed = any((not v) and p for v, p in zip(values, prev))
     prev = values
 
     if pressed:
         flip()
         time.sleep(0.15)                              # debounce the release
-        prev = [btn.value for btn in buttons]
+        prev = [btn.value for btn in flip_buttons]
     elif AUTO_FLIP_SECS > 0 and now - last_flip >= AUTO_FLIP_SECS:
         flip()
 
-    # Slow breathe so the badge reads as "alive" without eating the
-    # battery or distracting from the QR.
-    lvl = 0.25 + 0.75 * ((math.sin(now * 1.4) + 1) / 2)
-    r, g, b = tints[side]
-    pixels.fill((int(r * lvl), int(g * lvl), int(b * lvl)))
-    pixels.show()
+    # SW3 toggles the LEDs. Blanking them once on the edge is enough --
+    # the strip holds its last frame, so the off state costs no further
+    # bus traffic and no further current beyond the pixels' own idle.
+    led_val = led_button.value
+    if (not led_val) and led_prev:
+        leds_on = not leds_on
+        if not leds_on:
+            pixels.fill((0, 0, 0))
+            pixels.show()
+        print("leds:", "on" if leds_on else "off")
+        time.sleep(0.15)                              # debounce the release
+        led_val = led_button.value
+    led_prev = led_val
 
-    time.sleep(0.02)
+    if leds_on:
+        # Slow breathe so the badge reads as "alive" without eating the
+        # battery or distracting from the QR.
+        lvl = 0.25 + 0.75 * ((math.sin(now * 1.4) + 1) / 2)
+        r, g, b = tints[side]
+        pixels.fill((int(r * lvl), int(g * lvl), int(b * lvl)))
+        pixels.show()
+
+    # Poll fast enough to feel instant while lit; back off when the LEDs
+    # are out, since there's no animation left to keep smooth.
+    time.sleep(0.02 if leds_on else 0.08)

@@ -1,6 +1,6 @@
 # ProfileCard
 
-A two-sided digital badge. One side shows your photo with your handle underneath; the other shows a QR code pointing at your LinkedIn. Press any of the three buttons to flip. Copy this sample's `code.py` over the top-level `code.py` to run it (or pick it from the Launcher menu).
+A two-sided digital badge. One side shows your photo with your handle underneath; the other shows a QR code pointing at your LinkedIn. Press SW1 or SW2 to flip; SW3 toggles the LEDs off to save battery. Copy this sample's `code.py` over the top-level `code.py` to run it (or pick it from the Launcher menu).
 
 Both sides are pre-rendered BMPs in `/img/` — nothing is drawn or encoded on the badge, so a flip is instant.
 
@@ -16,6 +16,7 @@ PHOTO_BMP = "/img/avatar.bmp"
 QR_BMP    = "/img/qr.bmp"
 
 AUTO_FLIP_SECS = 0        # >0 flips on its own after N idle seconds
+LEDS_AT_BOOT   = True     # False boots with the NeoPixels dark
 ```
 
 `LINKEDIN` is only the caption text under the QR — it does not affect what the QR encodes. If your URL changes you have to regenerate `qr.bmp` (below).
@@ -26,9 +27,9 @@ AUTO_FLIP_SECS = 0        # >0 flips on its own after N idle seconds
 |--------|--------|
 | SW1 (IO1) | Flip to the other side |
 | SW2 (IO2) | Flip to the other side |
-| SW3 (IO43) | Flip to the other side |
+| SW3 (IO43) | LEDs on/off |
 
-All three buttons do the same thing on purpose — it doesn't matter which one someone grabs.
+The two flip buttons do the same thing on purpose — it doesn't matter which one someone grabs. SW3 is the battery switch: the NeoPixels are the biggest current draw on the board, so killing them is the one lever this sample has for stretching a CR123A. Note they're WS2812s, so "off" means every pixel set to black — each chip still idles at a milliamp or so, and the display backlight keeps running either way. Set `LEDS_AT_BOOT = False` to come up dark.
 
 ## Regenerating the images
 
@@ -94,7 +95,8 @@ Always verify the finished BMP actually decodes before trusting it — point you
 - **Both scenes built once at boot** — `build_scene()` returns a complete `displayio.Group` per side, so flipping is a single `display.root_group = scenes[side]` plus a refresh. No image decoding in the hot path, so the flip is instant. Two 128×128 8-bit bitmaps cost ~32 KB of RAM, which the ESP32-S3 has to spare.
 - **Backlight forced low before the adafruit imports** — the panel powers up bright white and those imports take a couple of seconds cold. Grabbing IO5 and driving it low on line one means you never see a white flash, then it goes high once the first scene is on screen. Same trick the Launcher uses.
 - **`build_scene(bmp, bg, y, lines)` is shared by both sides** — one function covers "full-screen background + 128×128 image + centred text lines", which is why the two sides are ~6 lines of configuration each instead of two parallel blocks of layout code.
-- **Any-button edge detection** — `any((not v) and p for v, p in zip(values, prev))` OR-s the press edges of all three switches, giving one flip per press regardless of which button, with no repeat while held.
+- **Any-button edge detection** — `any((not v) and p for v, p in zip(values, prev))` OR-s the press edges of both flip switches, giving one flip per press regardless of which button, with no repeat while held. SW3 runs the same edge logic on its own, so holding it doesn't strobe the LEDs.
+- **LEDs off costs nothing to maintain** — the toggle blanks the strip once on the press edge; WS2812s latch their last frame, so the off state needs no further `show()` in the loop. The poll interval also backs off from 20 ms to 80 ms when dark, since there's no animation left to keep smooth.
 - **The QR sits on a white background** — the BMP carries its own quiet zone, and a white scene background lets that border blend to the screen edge instead of being framed by black, which is what scanners want.
 - **Auto-flip shares the button code path** — both call `flip()`, so there's one place that swaps the scene, refreshes, and resets the idle timer.
 - **LEDs deliberately dim** (`brightness=0.15`) — this sample is meant to run all day off the CR123A, and the NeoPixels are the biggest draw on the board. The tint changes per side: warm white for the photo, LinkedIn blue for the QR.
