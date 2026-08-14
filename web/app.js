@@ -27,7 +27,11 @@ const LIB_FILES = [
 ];
 
 const CAPTION_MAX = 20;
-const REPO_URL = "https://github.com/ubergeek42/CarolinaCodeConferenceBadge2026";
+
+// Where "make your own" points: this page, not the repo. Someone scanning a
+// badge across a table wants the thing that provisions their badge in two
+// clicks, not a source tree to read.
+const FLASHER_URL = "https://ubergeek42.github.io/CarolinaCodeConferenceBadge2026/web/";
 
 const $ = (id) => document.getElementById(id);
 const state = { avatarGray: null, sides: [], files: null, user: null };
@@ -213,9 +217,9 @@ async function build() {
   previews.push(qrPreview(ghUrl));
 
   if ($("repo").checked) {
-    files.set("img/repo.bmp", qrToBMP(REPO_URL).bmp);
+    files.set("img/repo.bmp", qrToBMP(FLASHER_URL).bmp);
     sides.push(["qr", "/img/repo.bmp", "BADGE CODE", "make your own", 0x2DA44E]);
-    previews.push(qrPreview(REPO_URL));
+    previews.push(qrPreview(FLASHER_URL));
   }
 
   files.set("badge_profile.py", new TextEncoder().encode(profileSource(sides)));
@@ -287,14 +291,10 @@ async function writeToBadge(files, force = false) {
   }
   note(`badge: ${bootOut}`);
 
-  // Write only what differs, and never destroy work we didn't create. A file
-  // may be overwritten if it is identical anyway, if the manifest says we
-  // wrote it last time, or if it is an unmodified file from the repo (the
-  // Launcher that ships as code.py, or the sample itself). Anything else is
-  // treated as the owner's and left alone.
-  const manifest = await readManifest(root);
-  const stock = await stockHashes();
-  const newManifest = {};
+  // Two classes of file, two rules. ProfileCard's own files -- code.py,
+  // badge_profile.py, the images -- are what installing means, so they get
+  // replaced. The libraries in lib/ belong to the badge rather than to us and
+  // its owner may have upgraded them, so those are written only when missing.
   let written = 0, skipped = 0, bytes = 0, seen = 0;
   const preserved = [];
 
@@ -302,51 +302,33 @@ async function writeToBadge(files, force = false) {
     status(`checking… ${++seen}/${files.size}`);
     const parts = path.split("/");
     const name = parts[parts.length - 1];
+    const ours = !path.startsWith("lib/");
 
     let dir = root;
     for (const part of parts.slice(0, -1)) {
       dir = await dir.getDirectoryHandle(part, { create: true });
     }
 
-    const digest = await sha256(data);
     const existing = await readIfPresent(dir, name);
     if (existing) {
-      if (await sha256(existing) === digest) {
-        skipped++;
-        newManifest[path] = digest;
-        continue;
-      }
-      const have = await sha256(existing);
-      if (!force && have !== manifest[path] && !stock.has(have)) {
-        preserved.push(path);
-        continue;
-      }
+      if (sameBytes(existing, data)) { skipped++; continue; }
+      if (!ours && !force) { preserved.push(path); continue; }
     }
 
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable();
     await w.write(data);
     await w.close();
-    newManifest[path] = digest;
     written++;
     bytes += data.length;
-  }
-
-  if (written) {
-    const fh = await root.getFileHandle(MANIFEST, { create: true });
-    const w = await fh.createWritable();
-    await w.write(new TextEncoder().encode(
-      JSON.stringify({ version: 1, files: newManifest }, null, 1)));
-    await w.close();
   }
   return { written, skipped, bytes, preserved };
 }
 
-const MANIFEST = ".badge_flash.json";
-
-async function sha256(data) {
-  const d = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 async function readIfPresent(dir, name) {
@@ -356,32 +338,6 @@ async function readIfPresent(dir, name) {
   } catch {
     return null;                                    // not there yet
   }
-}
-
-async function readManifest(root) {
-  const data = await readIfPresent(root, MANIFEST);
-  if (!data) return {};
-  try {
-    return JSON.parse(new TextDecoder().decode(data)).files || {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Hashes of the repo files a badge is likely to already be carrying, so a
- * stock badge isn't mistaken for a customised one. flash.py scans the whole
- * repo for this; the page can only fetch what it knows the names of, so an
- * untouched *other* sample gets conservatively preserved rather than replaced.
- */
-let _stock = null;
-async function stockHashes() {
-  if (_stock) return _stock;
-  _stock = new Set();
-  for (const p of ["../samples/Launcher/code.py", "../samples/ProfileCard/code.py"]) {
-    try { _stock.add(await sha256(await fetchBinary(p))); } catch { /* optional */ }
-  }
-  return _stock;
 }
 
 // ------------------------------------------------------------------
@@ -443,8 +399,8 @@ async function onFlash() {
       : (preserved.length ? "nothing written." : "already up to date — nothing needed writing."));
     if (skipped) note(`${skipped} files were already on the badge, unchanged (the stock badge ships the libraries).`);
     if (preserved.length) {
-      note(`left alone, because they look like your own edits rather than mine: ${preserved.join(", ")}. ` +
-           "Save copies somewhere, then tick “replace my edits” to overwrite them.");
+      note(`left alone, because your copies differ from mine and they're the badge's libraries rather than ProfileCard's: ${preserved.join(", ")}. ` +
+           "Tick “replace the badge's libraries” if you want mine instead.");
       $("forceWrap").hidden = false;
     }
     note("SW1/SW2 step through the sides, SW3 toggles the LEDs.");

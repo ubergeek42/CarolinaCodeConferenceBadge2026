@@ -6,9 +6,14 @@ flash.py -- turn a stock CCC 2026 badge into your ProfileCard, in one command.
 
 Fetches your GitHub avatar, generates QR codes for your links, converts
 everything to the 128x128 8-bit indexed BMP the badge can actually load,
-and copies the whole payload -- images, libraries, code -- to a plugged-in
-badge. Nothing in this repo is modified; generated assets go to a staging
-directory so your own img/ stays yours.
+and writes it all to a plugged-in badge.
+
+ProfileCard's own files -- code.py, badge_profile.py, the images -- are
+replaced, because that is what installing it means. The badge's libraries in
+lib/ are written only if missing, since its owner may have upgraded them;
+--force replaces those too. Nothing else on the drive is touched, and nothing
+in this repo is modified: generated assets go to a staging directory so your
+own img/ stays yours.
 
 Requires ImageMagick (`brew install imagemagick`) to decode the avatar.
 Everything else is the Python standard library plus the vendored, MIT
@@ -17,8 +22,6 @@ licensed tools/adafruit_miniqr.py.
 
 import argparse
 import glob
-import hashlib
-import json
 import os
 import shutil
 import struct
@@ -33,6 +36,11 @@ sys.path.insert(0, os.path.join(HERE, "tools"))
 
 SIZE = 128                      # every badge image is 128x128
 CAPTION_MAX = 20                # 6 px glyphs in a 128 px panel, minus margin
+
+# Where "make your own" points. The web flasher, not the repo: someone
+# scanning a badge across a table wants the thing that provisions their badge
+# in two clicks, not a source tree to read.
+FLASHER_URL = "https://ubergeek42.github.io/CarolinaCodeConferenceBadge2026/web/"
 
 # The minimum set of libraries ProfileCard actually imports. A stock badge
 # already ships every one of these, so normally none get copied -- they are
@@ -283,51 +291,16 @@ def profile_source(sides):
 # ------------------------------------------------------------------
 # Copying
 #
-# The badge is someone's to hack, so the flasher must never destroy work it
-# didn't create. Three questions decide whether a file may be overwritten:
+# Two classes of file, two rules:
 #
-#   1. Is it byte-identical to what we're about to write?  -> nothing to do
-#   2. Did we write it last time (MANIFEST records the hash)?  -> ours, update
-#   3. Is it an unmodified file from this repo (a stock sample, the Launcher
-#      that ships as code.py)?  -> not personal, safe to replace
+#   ours     code.py, badge_profile.py and the images we just generated.
+#            These are the ProfileCard itself, so installing it means
+#            replacing them. Overwritten whenever they differ.
 #
-# Anything else is assumed to be the owner's own work and is left alone, with
-# a note saying so. --force overrides the lot.
+#   support  the libraries in lib/. These belong to the badge, not to us,
+#            and its owner may have upgraded or patched them. Written only
+#            when missing; an existing one is never touched without --force.
 # ------------------------------------------------------------------
-MANIFEST = ".badge_flash.json"
-
-
-def sha(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def load_manifest(drive):
-    try:
-        with open(os.path.join(drive, MANIFEST)) as f:
-            return json.load(f).get("files", {})
-    except (OSError, ValueError):
-        return {}
-
-
-def repo_hashes():
-    """Hashes of every file this repo ships, for question 3 above.
-
-    Scanned live rather than baked into a list, so a badge running any
-    unmodified sample -- not just the Launcher -- is recognised as stock.
-    """
-    out = set()
-    for sub in ("lib", "img", "samples"):
-        base = os.path.join(HERE, sub)
-        for root, _dirs, names in os.walk(base):
-            for n in names:
-                try:
-                    with open(os.path.join(root, n), "rb") as f:
-                        out.add(sha(f.read()))
-                except OSError:
-                    pass
-    return out
-
-
 def write_file(dest, data):
     """Write and fsync. The badge volume is mounted async, so without the
     fsync a file can still sit in the host's cache when someone unplugs."""
@@ -364,7 +337,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="build everything, copy nothing")
     ap.add_argument("--force", action="store_true",
-                    help="overwrite files even if they look hand-edited")
+                    help="also replace library files that differ from mine")
     args = ap.parse_args()
 
     stage = args.stage or tempfile.mkdtemp(prefix="badge-")
@@ -412,77 +385,62 @@ def main():
                   caption(args.github, "github"), 0x8250DF))
 
     if args.repo:
-        repo_url = "https://github.com/ubergeek42/CarolinaCodeConferenceBadge2026"
-        n, s = qr_to_bmp(repo_url, os.path.join(stage, "img", "repo.bmp"))
-        print("  qr:     %s  (%d modules at %d px)" % (repo_url, n, s))
+        n, s = qr_to_bmp(FLASHER_URL, os.path.join(stage, "img", "repo.bmp"))
+        print("  qr:     %s  (%d modules at %d px)" % (FLASHER_URL, n, s))
         sides.append(("qr", "/img/repo.bmp", "BADGE CODE",
                       "make your own", 0x2DA44E))
 
     with open(os.path.join(stage, "badge_profile.py"), "w") as f:
         f.write(profile_source(sides))
 
-    # --- payload ---
-    payload = [("samples/ProfileCard/code.py", "code.py"),
-               (os.path.join(stage, "badge_profile.py"), "badge_profile.py")]
+    # --- payload: (source, destination, is_ours) ---
+    payload = [("samples/ProfileCard/code.py", "code.py", True),
+               (os.path.join(stage, "badge_profile.py"), "badge_profile.py", True)]
     for style, img, _, _, _ in sides:
         name = img.lstrip("/")
-        payload.append((os.path.join(stage, name), name))
+        payload.append((os.path.join(stage, name), name, True))
     for name in LIB_FILES:
-        payload.append((os.path.join(HERE, "lib", name), "lib/" + name))
+        payload.append((os.path.join(HERE, "lib", name), "lib/" + name, False))
 
-    missing = [s for s, _ in payload if not os.path.isfile(
+    missing = [s for s, _, _ in payload if not os.path.isfile(
         s if os.path.isabs(s) else os.path.join(HERE, s))]
     if missing:
         raise SystemExit("missing payload files:\n  " + "\n  ".join(missing))
 
     if args.dry_run:
         total = sum(os.path.getsize(s if os.path.isabs(s) else os.path.join(HERE, s))
-                    for s, _ in payload)
-        print("\ndry run -- would copy %d files (%.1f KB) to a badge"
+                    for s, _, _ in payload)
+        print("\ndry run -- would copy up to %d files (%.1f KB) to a badge"
               % (len(payload), total / 1024.0))
         print("assets left in %s" % stage)
         return
 
     print("\nwriting to %s" % drive)
-    manifest = load_manifest(drive)
-    stock = repo_hashes()
     total = written = 0
     unchanged = []
     preserved = []
-    new_manifest = {}
 
-    for src, rel in payload:
+    for src, rel, ours in payload:
         src = src if os.path.isabs(src) else os.path.join(HERE, src)
         with open(src, "rb") as f:
             data = f.read()
         dest = os.path.join(drive, rel)
-        digest = sha(data)
 
         if os.path.isfile(dest):
             with open(dest, "rb") as f:
-                existing = f.read()
-            if existing == data:
-                unchanged.append(rel)
-                new_manifest[rel] = digest
-                continue
-            if not args.force:
-                have = sha(existing)
-                if have != manifest.get(rel) and have not in stock:
-                    preserved.append(rel)
+                if f.read() == data:
+                    unchanged.append(rel)
                     continue
+            # A support file that differs is the owner's business -- they may
+            # have upgraded the library. Ours we replace: that is the install.
+            if not ours and not args.force:
+                preserved.append(rel)
+                continue
 
         write_file(dest, data)
-        new_manifest[rel] = digest
         total += len(data)
         written += 1
         print("  %s" % rel)
-
-    # Record what is ours so a later run can tell our files from the owner's.
-    # Files we preserved stay out of it: they are not ours to claim.
-    if written or not os.path.isfile(os.path.join(drive, MANIFEST)):
-        blob = json.dumps({"version": 1, "files": new_manifest},
-                          indent=1, sort_keys=True).encode()
-        write_file(os.path.join(drive, MANIFEST), blob)
 
     if hasattr(os, "sync"):
         os.sync()
@@ -498,15 +456,15 @@ def main():
         print("  (skipped %s)" % ", ".join(parts))
 
     if preserved:
-        print("\nleft alone -- these look like your own edits, not mine:")
+        print("\nleft alone -- your copies of these differ from mine, and they"
+              " are the badge's, not ProfileCard's:")
         for rel in preserved:
             print("    %s" % rel)
-        print("  Copy them somewhere safe and re-run with --force to replace"
-              " them.")
+        print("  Re-run with --force if you want mine instead.")
 
     if written:
-        print("\ndone -- %d files, %.1f KB. The badge reloads on its own."
-              % (written, total / 1024.0))
+        print("\ndone -- %d file%s, %.1f KB. The badge reloads on its own."
+              % (written, "" if written == 1 else "s", total / 1024.0))
     elif preserved:
         print("\nnothing written.")
     else:
