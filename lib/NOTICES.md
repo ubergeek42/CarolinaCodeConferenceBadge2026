@@ -17,6 +17,10 @@ Full text of the license used by every library below is included at the bottom o
 | `adafruit_st7735r.mpy`                | https://github.com/adafruit/Adafruit_CircuitPython_ST7735R                | MIT     |
 | `neopixel.mpy`                        | https://github.com/adafruit/Adafruit_CircuitPython_NeoPixel               | MIT     |
 
+## First-Party Modules
+
+`badgenet.py` is **not** a third-party library — it is part of this badge project and is covered by the repository's own [MIT license](../LICENSE). It lives in `lib/` because that is where CircuitPython looks for shared imports.
+
 ## Attribution
 
 Copyright (c) Adafruit Industries and contributors. Individual copyright years and contributors are listed in each upstream repository's `LICENSE` and git history.
