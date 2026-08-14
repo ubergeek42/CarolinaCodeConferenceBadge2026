@@ -245,9 +245,10 @@ class Bus:
         return t
 
 
-def phase_of(rt, now, period=1.0):
-    st = rt.mods[0].ctx.state
-    return (now + st["offset"]) % period
+def phase_of(rt, now):
+    """Where this badge is in its cycle, using the module's own PERIOD."""
+    mod = rt.mods[0]
+    return (now + mod.ctx.state["offset"]) % mod.glb["PERIOD"]
 
 
 bus = Bus()
@@ -261,7 +262,8 @@ eq(ra.mods[0].ctx.pixels is pa, True, "it asked for and got the pixels")
 eq(ra.needs_radio, True, "and it wants the radio left on")
 
 # Start them deliberately out of step: half a beat apart.
-ra.mods[0].ctx.state["offset"] = 0.5
+SYNC_PERIOD = ra.mods[0].glb["PERIOD"]
+ra.mods[0].ctx.state["offset"] = SYNC_PERIOD / 2.0      # half a breath apart
 t = bus.run(until=4.0)
 
 eq(ra.mods[0].ctx.state["clock"], LOW, "the higher MAC followed the lower one")
@@ -269,19 +271,38 @@ eq(rb.mods[0].ctx.state["clock"], LOW, "the lower MAC stayed the clock")
 eq(rb.mods[0].ctx.state["hops"], 0, "clock is zero hops from itself")
 eq(ra.mods[0].ctx.state["hops"], 1, "follower is one hop out")
 near_phase(phase_of(ra, t), phase_of(rb, t), 0.05,
-           "phases converged to inside 50 ms of a 1 s beat")
-ok(pa.shows > 100 and pb.shows > 100, "both strips were driven every tick")
-eq(pa.last, pb.last, "in sync means the same colour and level at the same instant")
+           "breaths converged to inside 50 ms", period=SYNC_PERIOD)
+# Not "written every tick" -- deliberately not. NeoPixel writes allocate from
+# the ESP-IDF heap and the strip is rate limited to LED_HZ, so the right
+# assertion is that the rate limit is doing its job while still animating.
+led_hz = ra.mods[0].glb["LED_HZ"]
+ticks = ra.mods[0].ticks
+ok(pa.shows < ticks, "the strip is rate limited, not written on every tick")
+ok(0.5 * led_hz * 4.0 <= pa.shows <= 1.1 * led_hz * 4.0,
+   "but still driven at roughly LED_HZ over 4 s (%d writes, %d ticks)"
+   % (pa.shows, ticks))
+ok(pb.shows == pa.shows, "both badges drive their strips on the same schedule")
+# Same colour, near-identical brightness -- but NOT byte-identical, and it
+# would be wrong to demand that. The two badges agree on the breath to within
+# a loop pass, and on a smooth curve a 20 ms difference is a genuinely
+# different brightness. Asserting equality here just pinned the old strobe,
+# where both badges sat at the same floor value most of the cycle.
+ok(max(abs(x - y) for x, y in zip(pa.last, pb.last)) <= 16,
+   "in sync means the same colour within a few percent (%r vs %r)"
+   % (pa.last, pb.last))
+ok([i for i, v in enumerate(pa.last) if v == max(pa.last)]
+   == [i for i, v in enumerate(pb.last) if v == max(pb.last)],
+   "and the same dominant channel, i.e. the same group colour")
 
 # The group pip counts the other badge.
-eq(ra.mods[0].ctx.state["group_size"], 1, "one other badge in the group")
+eq(ra.mods[0].ctx.state["group"], 1, "one other badge in the group")
 
 # Now cut the radio: the follower must go back to its own beat rather than
 # holding a stale one forever.
 bus.nodes = [(HIGH, ra)]
 t = bus.run(until=t + 8.0, t0=t)
 eq(ra.mods[0].ctx.state["clock"], HIGH, "alone again, it clocks itself")
-eq(ra.mods[0].ctx.state["group_size"], 0, "and the group emptied")
+eq(ra.mods[0].ctx.state["group"], 0, "and the group emptied")
 
 # Lossy air must not break election -- beacons are fire-and-forget and
 # broadcast gives no delivery feedback at all, so every third frame vanishing
@@ -292,10 +313,11 @@ rc = bus2.join(HIGH, FakePixels())
 rd = bus2.join(LOW, FakePixels())
 rc.load(SYNC)
 rd.load(SYNC)
-rc.mods[0].ctx.state["offset"] = 0.37
+rc.mods[0].ctx.state["offset"] = SYNC_PERIOD * 0.37
 t2 = bus2.run(until=6.0)
 eq(rc.mods[0].ctx.state["clock"], LOW, "election survives 33% loss")
-near_phase(phase_of(rc, t2), phase_of(rd, t2), 0.05, "and so does phase agreement")
+near_phase(phase_of(rc, t2), phase_of(rd, t2), 0.05,
+           "and so does phase agreement", period=SYNC_PERIOD)
 
 # Three in a chain, where the middle badge is the only one that hears both:
 # the far badge must still end up on the clock, via the middle.
@@ -307,7 +329,8 @@ for r in (r1, r2, r3):
     r.load(SYNC)
 t3 = bus3.run(until=5.0)
 eq(r3.mods[0].ctx.state["clock"], LOW, "everyone lands on the lowest MAC")
-near_phase(phase_of(r3, t3), phase_of(r1, t3), 0.05, "and on its beat")
+near_phase(phase_of(r3, t3), phase_of(r1, t3), 0.05,
+           "and on its rhythm", period=SYNC_PERIOD)
 ok(r3.mods[0].ctx.state["hops"] >= 1, "hop count is at least one from the clock")
 
 

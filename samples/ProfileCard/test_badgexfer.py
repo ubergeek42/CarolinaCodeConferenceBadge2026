@@ -231,7 +231,32 @@ def read(path):
 
 
 SOURCE = read("mods/syncflash.py")
-BLOB = SOURCE.encode()
+
+
+def read_bytes(path):
+    for prefix in ("", "/"):
+        try:
+            with open(prefix + path, "rb") as f:
+                return f.read()
+        except OSError:
+            continue
+    return None
+
+
+# Carry the real thing: the deflate blob tools/mkmod.py built, with the flag a
+# real OFFER would set.
+BLOB = read_bytes("mods/syncflash.mod")
+FLAGS = bx.FLAG_DEFLATE
+if BLOB is None:                       # no .mod built yet; fall back
+    BLOB, FLAGS = SOURCE.encode(), 0
+ok(len(BLOB) <= bx.MAX_BLOB, "the blob fits inside the wire cap")
+if FLAGS & bx.FLAG_DEFLATE:
+    # Both forms fit here, so this is about airtime rather than possibility:
+    # compression is what makes a module a handful of frames instead of dozens.
+    ok(len(BLOB) < len(SOURCE.encode()) // 2,
+       "and compression more than halved it (%d -> %d bytes, %d -> %d chunks)"
+       % (len(SOURCE.encode()), len(BLOB),
+          bx.n_chunks(len(SOURCE.encode())), bx.n_chunks(len(BLOB))))
 gc.collect()
 try:
     print("  heap free before transfers:", gc.mem_free())
@@ -243,7 +268,7 @@ def run_transfer(drop_every, receivers=1, limit=40.0):
     """Drive a sender and N receivers to completion. Returns (secs, results)."""
     air = bx.Air(drop_every=drop_every)
     tx_radio = air.join(b"\x02\x00\x00\x00\x00\x01")
-    offer = bx.build_offer("syncflash", BLOB)
+    offer = bx.build_offer("syncflash", BLOB, flags=FLAGS)
     sender = bx.Sender(tx_radio.send, offer, BLOB)
 
     ends = []
@@ -267,16 +292,25 @@ def run_transfer(drop_every, receivers=1, limit=40.0):
             if results[i] is None:
                 got = rx.take()
                 if got is not None:
-                    results[i] = (t, got, rx)
+                    # Compare and discard rather than keeping the source.
+                    # Three receivers each holding an inflated 9 KB module is
+                    # 27 KB of a ~100 KB heap, and on the badge that was the
+                    # difference between this test passing and a MemoryError.
+                    offer_got, source_got, _blob = got
+                    results[i] = (t, offer_got, len(source_got),
+                                  source_got == SOURCE)
+                    got = source_got = None
+                    gc.collect()
         t += 0.02                                  # a main-loop pass
     return t, results, sender, air
 
 
 t, results, sender, air = run_transfer(drop_every=0)
 ok(results[0] is not None, "lossless transfer completes")
-done_t, (offer_got, source_got, blob_got) = results[0][0], results[0][1]
-eq(source_got, SOURCE, "the receiver reconstructed the module byte for byte")
-eq(offer_got.name, "syncflash", "with the right name")
+done_t = results[0][0]
+eq(results[0][3], True, "the receiver reconstructed the module byte for byte")
+eq(results[0][2], len(SOURCE), "at the right length")
+eq(results[0][1].name, "syncflash", "with the right name")
 ok(done_t <= 2.0, "and took under 2 s of badge time (was %.2fs)" % done_t)
 ok(sender.laps <= 2, "in no more than two laps")
 
@@ -284,8 +318,9 @@ del results, sender, air
 gc.collect()
 t, results, sender, air = run_transfer(drop_every=3)
 ok(results[0] is not None, "transfer completes with a third of frames dropped")
-eq(results[0][1][1], SOURCE, "still byte for byte")
-ok(air.dropped > 10, "and frames really were dropped (%d)" % air.dropped)
+eq(results[0][3], True, "still byte for byte")
+ok(air.dropped >= air.frames // 4,
+   "and a real share of frames was dropped (%d of %d)" % (air.dropped, air.frames))
 
 # Several receivers on one sender is the case the carousel exists for: no
 # per-receiver state, so three should finish in about the time one does.
@@ -293,7 +328,7 @@ del results, sender, air
 gc.collect()
 t, results, sender, air = run_transfer(drop_every=4, receivers=3)
 ok(all(r is not None for r in results), "three receivers all complete")
-ok(all(r[1][1] == SOURCE for r in results), "all three got identical source")
+ok(all(r[3] for r in results), "all three reconstructed it exactly")
 spread = max(r[0] for r in results) - min(r[0] for r in results)
 ok(spread < 2.0, "and finished within 2 s of each other (%.2fs)" % spread)
 
@@ -303,7 +338,7 @@ reqs = []
 air2 = bx.Air()
 tx2 = air2.join(b"\x03\x00\x00\x00\x00\x01")
 rx_radio = air2.join(b"\x03\x00\x00\x00\x00\x02")
-offer2 = bx.build_offer("syncflash", BLOB)
+offer2 = bx.build_offer("syncflash", BLOB, flags=FLAGS)
 snd2 = bx.Sender(tx2.send, offer2, BLOB)
 rcv2 = bx.Receiver(send=lambda k, b: reqs.append((k, b)) or rx_radio.send(k, b))
 rcv2.on_frame(tx2.mac, bx.OFFER, bx.pack_offer(offer2), -50, now=0.0)

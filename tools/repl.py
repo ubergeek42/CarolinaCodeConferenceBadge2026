@@ -9,6 +9,7 @@ of it.
     python3 tools/repl.py -c "import gc; print(gc.mem_free())"
     python3 tools/repl.py probe.py --fresh    # soft-reset first
     python3 tools/repl.py probe.py --reload    # hand the badge back to code.py
+    python3 tools/repl.py slow.py --secs=90 --idle=15   # something genuinely slow
 
 Needs pyserial. If you'd rather not install it:
 
@@ -35,7 +36,23 @@ import serial
 PORT = os.environ.get("PORT") or sorted(glob.glob("/dev/cu.usbmodem*"))[0]
 
 
-def drain(p, secs, idle=10.0):
+def opt(name, default):
+    """Value of --name=N, or default."""
+    for a in sys.argv[1:]:
+        if a.startswith("--%s=" % name):
+            return float(a.split("=", 1)[1])
+    return default
+
+
+# Both bounded, and bounded tightly. A snippet that has gone quiet for three
+# seconds is finished or wedged, and either way there is nothing to gain by
+# waiting: the badge either answers immediately or needs a reset. Raise these
+# with --secs= / --idle= for something genuinely slow, like a paced radio burst.
+SECS = opt("secs", 25.0)
+IDLE = opt("idle", 3.0)
+
+
+def drain(p, secs, idle=IDLE):
     """Read until `idle` seconds of silence, or `secs` overall."""
     out = []
     deadline = time.time() + secs
@@ -79,7 +96,7 @@ def main():
     drain(p, 0.3)
     p.write(src.replace("\n", "\r\n").encode())
     p.write(b"\x04")              # Ctrl-D: run the pasted block
-    print(drain(p, 180), end="")
+    print(drain(p, SECS), end="")
 
     if "--reload" in sys.argv:
         p.write(b"\x04")

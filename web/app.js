@@ -211,16 +211,14 @@ async function build() {
     note(`LinkedIn QR: ${modules} modules at ${scale} px`);
   }
 
-  const ghUrl = `https://github.com/${user}`;
-  files.set("img/github.bmp", qrToBMP(ghUrl).bmp);
-  sides.push(["qr", "/img/github.bmp", "GITHUB", caption(user, "github", warnings), 0x8250DF]);
-  previews.push(qrPreview(ghUrl));
-
-  if ($("repo").checked) {
-    files.set("img/repo.bmp", qrToBMP(FLASHER_URL).bmp);
-    sides.push(["qr", "/img/repo.bmp", "BADGE CODE", "make your own", 0x2DA44E]);
-    previews.push(qrPreview(FLASHER_URL));
-  }
+  // Three sides, and no GitHub-profile QR. Each side costs about 19 KB of a
+  // ~150 KB heap once the badge's radio is up, so the rotation is a budget as
+  // much as a design: photo, the way to reach you, and the way to get one of
+  // these. A QR to your GitHub profile was the first thing to go -- the badge
+  // already says who you are.
+  files.set("img/repo.bmp", qrToBMP(FLASHER_URL).bmp);
+  sides.push(["qr", "/img/repo.bmp", "MAKE YOUR OWN", "flash a badge", 0x2DA44E]);
+  previews.push(qrPreview(FLASHER_URL));
 
   files.set("badge_profile.py", new TextEncoder().encode(profileSource(sides)));
 

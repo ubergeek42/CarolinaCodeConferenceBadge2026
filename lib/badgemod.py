@@ -103,6 +103,7 @@ class Ctx:
         self.inbox = []             # [(mac, payload, rssi)] since last tick
         self.dirty = False          # set True when `group` changed
         self.needs_radio = False    # set True to veto radio duty-cycling
+        self.led_drops = 0          # LED frames lost to IDF-heap pressure
         self._send = send
         self._log = log
 
@@ -123,6 +124,32 @@ class Ctx:
             self._log(self.name, *args)
         else:
             print("[%s]" % self.name, *args)
+
+    def show(self):
+        """Push the pixel buffer, tolerating a transient out-of-memory.
+
+        Modules should call this rather than `ctx.pixels.show()`.
+
+        A NeoPixel write allocates from the **ESP-IDF** heap on every call,
+        and with WiFi up that heap is under real pressure -- so `show()` can
+        raise `espidf.MemoryError` while tens of kilobytes of *Python* heap
+        remain free. Measured, not theorised: the first version of this badge
+        died exactly that way after a few seconds of running SyncFlash with
+        the radio on.
+
+        A dropped LED frame is invisible at 30 Hz. A module unloaded for one,
+        or a main loop killed by one, is not. The count is exposed rather
+        than swallowed so the failure stays a fact instead of folklore.
+        """
+        if self.pixels is None:
+            return False
+        try:
+            self.pixels.show()
+            return True
+        except MemoryError:
+            # espidf.MemoryError subclasses the builtin, so this catches both.
+            self.led_drops += 1
+            return False
 
 
 class Module:
@@ -316,8 +343,16 @@ class Runtime:
         if self.pixel_owner == mod.name:
             self.pixel_owner = None
             if self.pixels is not None:
-                self.pixels.fill((0, 0, 0))
-                self.pixels.show()
+                # Wrapped because this runs from inside tick()'s error
+                # handling, and a NeoPixel write can itself fail with
+                # espidf.MemoryError under WiFi pressure. Unwrapped, the
+                # cleanup for one dead module took down the whole main loop --
+                # the badge stopped polling buttons and looked bricked.
+                try:
+                    self.pixels.fill((0, 0, 0))
+                    self.pixels.show()
+                except Exception as ex:
+                    print("[badgemod] could not blank pixels: %s" % ex)
         self.mods.remove(mod)
         self._note(mod.name, reason)
         gc.collect()
@@ -350,17 +385,31 @@ class Runtime:
                 # was running when the watchdog fired is the one to blame.
                 name = type(ex).__name__
                 mod.error = "%s: %s" % (name, ex)
+                # Everything in the handler is itself wrapped. Printing a
+                # traceback allocates, unloading touches hardware, and both
+                # run at the exact moment memory is scarcest -- so a failure
+                # in here is likely, and a failure in here would propagate
+                # into the main loop and stop the badge dead. That is what
+                # happened on the first hardware run: a module hit an
+                # out-of-memory, and cleaning up after it raised the same
+                # error again, out of tick(), killing the loop.
                 try:
-                    import traceback
-                    traceback.print_exception(ex)
-                except Exception:
-                    print("[badgemod] %s raised %s" % (mod.name, mod.error))
-                self.unload(mod, "crashed: %s" % name)
-                if name == "WatchDogTimeout":
-                    # The watchdog is spent once it fires; re-arm so the next
-                    # misbehaving module is caught too.
-                    self._armed = False
-                    self.arm()
+                    try:
+                        import traceback
+                        traceback.print_exception(ex)
+                    except Exception:
+                        print("[badgemod] %s raised %s" % (mod.name, mod.error))
+                    self.unload(mod, "crashed: %s" % name)
+                    if name == "WatchDogTimeout":
+                        # The watchdog is spent once it fires; re-arm so the
+                        # next misbehaving module is caught too.
+                        self._armed = False
+                        self.arm()
+                except Exception as ex2:
+                    print("[badgemod] cleanup after %s also failed: %s"
+                          % (mod.name, ex2))
+                    if mod in self.mods:
+                        self.mods.remove(mod)
                 continue
             ms = (time.monotonic_ns() - t0) / 1000000.0
             mod.ticks += 1

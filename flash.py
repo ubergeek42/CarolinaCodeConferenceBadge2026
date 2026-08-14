@@ -326,8 +326,6 @@ def main():
                     help="LinkedIn vanity name, 'in/name' or full URL")
     ap.add_argument("--handle", metavar="TEXT",
                     help="text under your photo (default: GitHub username)")
-    ap.add_argument("--repo", action="store_true",
-                    help="add a side linking to this badge's source repo")
     ap.add_argument("--color", action="store_true",
                     help="keep the avatar in colour (default: grayscale)")
     ap.add_argument("--drive", metavar="PATH",
@@ -378,17 +376,16 @@ def main():
         sides.append(("qr", "/img/qr.bmp", "LINKEDIN",
                       caption(cap, "linkedin"), 0x0A66C2))
 
-    gh_url = "https://github.com/%s" % args.github
-    n, s = qr_to_bmp(gh_url, os.path.join(stage, "img", "github.bmp"))
-    print("  qr:     %s  (%d modules at %d px)" % (gh_url, n, s))
-    sides.append(("qr", "/img/github.bmp", "GITHUB",
-                  caption(args.github, "github"), 0x8250DF))
-
-    if args.repo:
-        n, s = qr_to_bmp(FLASHER_URL, os.path.join(stage, "img", "repo.bmp"))
-        print("  qr:     %s  (%d modules at %d px)" % (FLASHER_URL, n, s))
-        sides.append(("qr", "/img/repo.bmp", "BADGE CODE",
-                      "make your own", 0x2DA44E))
+    # Three sides, and no GitHub-profile QR. Each side costs about 19 KB of a
+    # ~150 KB heap once the radio is up, so the rotation is a budget as much as
+    # a design: photo, the way to reach you, and the way to get one of these.
+    # A QR to your GitHub profile was the first thing to go -- the badge
+    # already says who you are, and anyone who wants your repos can find them
+    # from the LinkedIn card.
+    n, s = qr_to_bmp(FLASHER_URL, os.path.join(stage, "img", "repo.bmp"))
+    print("  qr:     %s  (%d modules at %d px)" % (FLASHER_URL, n, s))
+    sides.append(("qr", "/img/repo.bmp", "MAKE YOUR OWN",
+                  "flash a badge", 0x2DA44E))
 
     with open(os.path.join(stage, "badge_profile.py"), "w") as f:
         f.write(profile_source(sides))

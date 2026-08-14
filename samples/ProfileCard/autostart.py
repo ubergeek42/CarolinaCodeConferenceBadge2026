@@ -23,6 +23,7 @@ does not become the new default. To go back to the stock behaviour, copy
 samples/Launcher/code.py over the top-level code.py.
 """
 
+import gc
 import time
 import board
 import digitalio
@@ -53,9 +54,20 @@ def _any_button_held():
 
 
 def _run(path):
+    """Run a sample, having first given back every byte we can spare.
+
+    Compiling and then dropping the source matters more than it looks.
+    ProfileCard is ~25 KB of text, and holding that string alive for the whole
+    run costs it a side: each card is about 19 KB of image and there is only
+    about 45 KB free once the radio is up. Booting through this shim without
+    the `del` really did build one side instead of three.
+    """
     with open(path) as f:
         source = f.read()
-    exec(source, {"__name__": "__main__", "__file__": path})
+    code = compile(source, path, "exec")
+    del source
+    gc.collect()
+    exec(code, {"__name__": "__main__", "__file__": path})
 
 
 target = LAUNCHER if _any_button_held() else PROFILECARD

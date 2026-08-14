@@ -1,6 +1,8 @@
 # ProfileCard
 
-A digital badge that cycles through a photo card and any number of QR cards. As shipped: your photo with your handle underneath, a QR to your LinkedIn, and a QR to this repo. Press SW1 or SW2 for the next side; SW3 toggles the LEDs off to save battery. Copy this sample's `code.py` over the top-level `code.py` to run it (or pick it from the Launcher menu).
+A digital badge that cycles through a photo card and any number of QR cards, and listens to the badges around it. As shipped: your photo with your handle underneath, a QR to your LinkedIn, and a QR to the web flasher so anyone who likes it can make their own. Press SW1 or SW2 for the next side.
+
+SW3 opens the other half: the badge can **accept a small Python module from a nearby badge over ESP-NOW, run it in the background while still showing your card, and pass it on**. It also keeps a log of which badges you were near and for how long. See [Swarm mode](#swarm-mode) below, and [`mods/README.md`](../../mods/README.md) for writing a module.
 
 ## Booting into it without losing the picker
 
@@ -35,11 +37,47 @@ The captions are text only — a QR's URL is baked into its bitmap, so a new lin
 
 | Switch | Action |
 |--------|--------|
-| SW1 (IO1) | Next side |
-| SW2 (IO2) | Next side |
-| SW3 (IO43) | LEDs on/off |
+| SW1 (IO1) / SW2 (IO2) | Next side. In LISTEN, accepts an offered module; in SHARE, picks what to send |
+| SW3 (IO43) tap | Cycle mode: NORMAL → LISTEN → SHARE → NORMAL |
+| SW3 hold (>1 s) | LEDs on/off |
+| SW1+SW2 held at boot | Skip autoloading `/mods` |
 
-The two advance buttons do the same thing on purpose — it doesn't matter which one someone grabs. SW3 is the battery switch: the NeoPixels are the biggest current draw on the board, so killing them is the one lever this sample has for stretching a CR123A. Note they're WS2812s, so "off" means every pixel set to black — each chip still idles at a milliamp or so, and the display backlight keeps running either way. Set `LEDS_AT_BOOT = False` to come up dark.
+The two advance buttons do the same thing on purpose — it doesn't matter which one someone grabs. SW3 carries two jobs because it's the only free button: a tap moves through the modes, a hold is the LED switch. The hold fires the moment it qualifies rather than on release, because a button that does nothing until you let go feels broken.
+
+Note the LEDs are WS2812s, so "off" means every pixel set to black — each chip still idles at a milliamp or so. Set `LEDS_AT_BOOT = False` to come up dark.
+
+If the badge boots through [`autostart.py`](autostart.py), holding *any* button at boot gives you the Launcher instead, which is also a way past a module that misbehaves — nothing in `/mods` runs. The SW1+SW2 hatch is for when ProfileCard is the top-level `code.py` directly.
+
+## Swarm mode
+
+```
+NORMAL ──SW3──▶ LISTEN ──SW3──▶ SHARE ──SW3──▶ NORMAL
+                  │                │
+        SW1/SW2 accepts      SW1/SW2 picks
+        what is offered      what to send
+```
+
+**LISTEN** shows how many badges are near, and puts up a banner naming any module being offered — who from, how big, how many hops it has travelled, and how much of it has arrived. Nothing runs until you press SW1 or SW2.
+
+**SHARE** broadcasts one of your modules on a loop. Anyone in LISTEN sees the offer. A ~1.6 KB module is 7 frames, about 0.12 s per lap, so it crosses in well under a second.
+
+Chunks are buffered *before* you accept, so accepting is instant instead of costing another lap — consent gates execution, not memory. Accepting also makes you a sender for that module, which is how it spreads hop by hop. Declining sticks for a minute, so "no" doesn't mean "ask me again in 300 ms".
+
+On battery an accepted module is written to `/mods/` and autoloads for good. **On USB it can only run from RAM** — `storage.remount()` refuses while the drive is visible to a computer — and the banner says `in RAM (tethered)` when that happens.
+
+There is no signing and no sandbox, and the design doesn't pretend otherwise. The threat model is "a friend pushes something silly to your badge": the button press is the security model, sizes are capped, a module that crashes or hangs is unloaded automatically, and there are two ways to boot without loading anything.
+
+## The proximity log
+
+With `STATS = True` the badge remembers every badge it hears — how long you were near each other, how many separate times, and the closest you ever got — in `microcontroller.nvm`, which survives a flat battery and, unlike the filesystem, is writable while plugged in. Read it back with:
+
+```sh
+python3 tools/badgedump.py            # who you were near, longest first
+python3 tools/badgedump.py --csv      # the same, machine readable
+python3 tools/badgedump.py --tombstone   # just how long the last run lasted
+```
+
+Two honest limits. The badge has no RTC, so records carry a session number and an uptime, not a time of day; `badgedump.py` can pin the *current* session to the wall clock because it knows both, and says so rather than inventing times for earlier ones. And "closest" is a raw dBm reading — RSSI correlates with distance on a good day and moves several dB when a person steps between two badges, so it is never converted into metres.
 
 ## Regenerating the images
 
@@ -140,4 +178,10 @@ for r in results {
 - **LEDs off costs nothing to maintain** — the toggle blanks the strip once on the press edge; WS2812s latch their last frame, so the off state needs no further `show()` in the loop. The poll interval also backs off from 20 ms to 80 ms when dark, since there's no animation left to keep smooth.
 - **QRs sit on a white background** — the BMP carries its own quiet zone, and a white scene background lets that border blend to the screen edge instead of being framed by black, which is what scanners want.
 - **Auto-advance shares the button code path** — both call `next_side()`, so there's one place that steps `(side + 1) % len(scenes)`, swaps the scene, refreshes, and resets the idle timer. The modulo is why the rotation doesn't care how many sides you configured.
-- **LEDs deliberately dim** (`brightness=0.15`) — this sample is meant to run all day off the CR123A, and the NeoPixels are the biggest draw on the board. The per-side accent doubles as the tint: warm white on the photo, LinkedIn blue, GitHub purple.
+- **One root group with three slots** — the side, a module's overlay, and the swarm banner. Swapping a side is one assignment, and a module's graphics survive the swap instead of being rebuilt. A *full* repaint measures 87 ms on this panel (not SPI-bound — 74 ms at 24 MHz), so the banner is a 40-row strip rather than a screen takeover, and the display only refreshes when something actually changed.
+- **Exactly one radio frame per loop pass** — unpaced ESP-NOW sends saturate the TX queue and then `send()` blocks for up to **205 ms** with no exception and no counter. Paced at 8 ms or more it is a flat 0.6 ms every time. This is the single most important measured constraint in the whole sample.
+- **LED writes are rate limited and allowed to fail** — every NeoPixel write allocates from the ESP-IDF heap, which is scarce with WiFi up, and it does run out: an early build died with `espidf.MemoryError` after a few seconds. Writes happen at 30 Hz and a lost frame is counted, not raised.
+- **The watchdog is cleared at boot and disarmed on exit** — a RAISE-mode watchdog *survives a soft reload*, so one left armed by a previous run fires during the next boot's image loading and hard faults into safe mode with no output at all. `code.py` clears any inherited watchdog on line one and a `finally` takes its own down.
+- **Running out of RAM drops sides rather than dying** — each card is ~19 KB of a ~45 KB budget once the radio is up, so a fourth side is genuinely close to the ceiling. A badge showing two of your three sides is a better failure than one showing the CircuitPython console.
+- **The proximity log is one nvm write a minute** — an nvm write costs ~65 ms *per call regardless of length* (one byte and two kilobytes are the same, because the cost is erasing the page), so the whole region is serialised in a single slice assignment, never during a transfer, and a failed write keeps the log in RAM and retries.
+- **`SIDES` comes from `/badge_profile.py` when it exists** — so re-running the flasher changes your photo and links without ever touching `code.py`, and your edits here survive a re-flash.

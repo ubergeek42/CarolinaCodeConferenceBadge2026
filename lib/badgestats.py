@@ -41,6 +41,7 @@ is still an unmeasured guess, so `best_rssi` is stored raw, in dBm, and
 described as "closest" rather than converted into metres it cannot support.
 """
 
+import gc
 import time
 
 MAGIC = b"CCST"
@@ -152,8 +153,9 @@ class Stats:
         self.tomb_label = 0         # which power configuration was being timed
         self.dirty = False
         self.writes = 0
+        self.failed_writes = 0
         self.evicted = 0
-        self.last_flush = 0.0
+        self.last_flush = None      # set on the first flush() call, not at boot
         self._loaded = False
 
     # -- durability -------------------------------------------------------
@@ -202,6 +204,15 @@ class Stats:
         now = time.monotonic() if now is None else now
         if not allow:
             return False
+        if self.last_flush is None:
+            # First call sets the clock rather than writing. `time.monotonic()`
+            # counts from power-on, not from when this program started, so a
+            # badge that has been sitting at the REPL for five minutes would
+            # otherwise satisfy `now - 0.0 >= FLUSH_SECS` on its very first
+            # loop pass and take a 65 ms nvm write during boot.
+            self.last_flush = now
+            if not force:
+                return False
         if not force and (not self.dirty or now - self.last_flush < FLUSH_SECS):
             return False
 
@@ -226,10 +237,28 @@ class Stats:
         buf = bytearray(head)
         for c in ordered:
             buf += pack_contact(c)
+
         # One assignment. The 65 ms cost is per call, not per byte, so
         # splitting this into "just the dirty records" would be strictly
         # slower as well as more code.
-        self.nvm[HEADER_AT:HEADER_AT + len(buf)] = bytes(buf)
+        #
+        # Both the collect and the try matter, and both were learned on
+        # hardware. Writing a slice of nvm allocates a buffer the size of the
+        # *whole* 8 KB region internally, whatever the slice length -- so on a
+        # badge with the radio up and three images loaded, this is one of the
+        # largest single allocations the program ever asks for, and it does
+        # fail. When it failed unguarded it killed the main loop, and the badge
+        # stopped responding to buttons. Losing a minute of the log is nothing;
+        # losing the badge is not.
+        gc.collect()
+        try:
+            self.nvm[HEADER_AT:HEADER_AT + len(buf)] = buf
+        except (MemoryError, OSError) as ex:
+            self.failed_writes += 1
+            print("[badgestats] nvm write failed (%s: %s); keeping the log in "
+                  "RAM and retrying next time" % (type(ex).__name__, ex))
+            self.last_flush = now          # don't retry every single pass
+            return False
         self.writes += 1
         self.dirty = False
         self.last_flush = now
