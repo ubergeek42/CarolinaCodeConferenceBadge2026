@@ -139,6 +139,7 @@ export function qrToBMP(url) {
   }
   return {
     bmp: writeBMP1(pixels),                 // 1-bit: 2 KB, not 16 KB
+    pixels,                                 // the module grid, for the preview
     modules: n,
     scale,
   };

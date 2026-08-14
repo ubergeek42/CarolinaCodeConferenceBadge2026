@@ -273,14 +273,13 @@ async function build() {
 }
 
 function qrPreview(url) {
-  // Re-derive the module grid for the preview rather than decoding the BMP.
-  const { bmp } = qrToBMP(url);
-  const pixels = new Uint8Array(SIZE * SIZE);
-  const offset = 14 + 40 + 1024;
-  for (let y = 0; y < SIZE; y++) {
-    pixels.set(bmp.subarray(offset + (SIZE - 1 - y) * SIZE, offset + (SIZE - y) * SIZE),
-               y * SIZE);
-  }
+  // Take the module grid straight from the encoder rather than decoding the
+  // BMP back out. The old version walked the file assuming an 8-bit layout --
+  // a 1024-byte palette and one byte per pixel -- so when QRs became 1-bit it
+  // read header and packed bits as pixel indices, and renderSide then tried to
+  // destructure palette[219]. That is where "undefined is not iterable" came
+  // from. Nothing here needs to parse a file we just wrote.
+  const { pixels } = qrToBMP(url);
   return { pixels, palette: QR_PAL };
 }
 
