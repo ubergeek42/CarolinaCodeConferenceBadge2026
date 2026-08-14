@@ -59,6 +59,13 @@ SIDES = (
     ("qr",    "/img/repo.bmp",   "MAKE YOUR OWN", "flash a badge", 0x2DA44E),
 )
 
+# What nearby badges see, and what their logs record you as. Leave it blank to
+# use the name on your photo side, which is almost always what you want: the
+# flashers write /badge_profile.py and never touch this file, so a handle
+# hardcoded here would make every badge anyone flashes introduce itself as
+# whoever committed the line. Only 8 characters survive into another badge's log.
+HANDLE = ""
+
 # A badge provisioned by flash.py or the web flasher gets its own details in
 # /badge_profile.py, which wins over the table above. That is what lets a
 # re-flash change your photo and links without ever rewriting this file -- so
@@ -68,7 +75,15 @@ try:
 except ImportError:
     pass                            # not flashed; the table above is it
 
-HANDLE = "ubergeek42"       # what nearby badges see (8 chars are logged)
+if not HANDLE:
+    # The caption on the photo side is the name this badge already shows to
+    # anyone looking at it, so it is the honest thing to broadcast. Lowered
+    # because it is displayed shouty and stored in an 8-byte field.
+    HANDLE = "badge"
+    for _style, _img, _l1, _l2, _a in SIDES:
+        if _style == "photo" and _l1:
+            HANDLE = _l1.lower()
+            break
 
 # Seconds of no button press before the badge advances on its own.
 AUTO_FLIP_SECS = 0
@@ -523,6 +538,7 @@ beacon_body = HANDLE.encode()[:bn.MAX_BODY]
 runtime.arm()
 
 print("ProfileCard: %d sides -- %s" % (len(scenes), " -> ".join(names)))
+print("  handle %s" % HANDLE)
 print("  radio %s  mods %s  stats %s"
       % ("%s ch%d tx%.0f" % (bn.mac_str(my_mac), bn.CHANNEL, radio.tx_power)
          if radio else "OFF",
