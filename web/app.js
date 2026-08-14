@@ -285,7 +285,14 @@ function qrPreview(url) {
 }
 
 async function fetchBinary(path) {
-  const r = await fetch(path);
+  // "no-cache" means revalidate, not "don't cache": the ETag still saves the
+  // download when nothing changed. It matters because the payload is a dozen
+  // files that have to agree with each other, and Pages serves them with
+  // max-age=600 independently. Without this, for ten minutes after a deploy a
+  // returning visitor can pair a fresh samples/ProfileCard/code.py with a
+  // cached app.js that doesn't know to fetch the libraries that card imports
+  // -- which flashes a badge that boots to an ImportError.
+  const r = await fetch(path, { cache: "no-cache" });
   if (!r.ok) throw new Error(`could not load ${path} (HTTP ${r.status})`);
   return new Uint8Array(await r.arrayBuffer());
 }
