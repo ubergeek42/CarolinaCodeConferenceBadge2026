@@ -72,9 +72,24 @@ because otherwise a fix could never propagate past the first badge.
 
 ## nearby
 
-One LED per badge in earshot, up to five. Small on purpose — it is the module
-to hand around when demonstrating that handing modules around works, and at 438
-compressed bytes it is the cheapest possible thing to put on the air.
+One LED per badge within talking distance, up to five: blue, green, yellow,
+orange, red. A crowd meter you can read without looking at the screen. Small on
+purpose — it is the module to hand around when demonstrating that handing
+modules around works, and at ~450 compressed bytes it is the cheapest useful
+thing to put on the air.
+
+**"Nearby" means above `NEAR_DBM`, not merely audible.** Version 1 counted every
+badge it could hear, which on a desk with two badges looks perfect and in a room
+with two hundred pins at five LEDs and tells you nothing — the radio reaches
+much further at 20 dBm than "near" means to a person. It now filters on signal
+strength, so the count tracks people you could actually talk to.
+
+The threshold is a judgement, not a measurement: −60 dBm is roughly
+conversational range on this hardware, but RSSI moves several dB when someone
+steps between two badges, and `badgenet.rssi_to_unit()`'s calibration is still
+unverified against a second badge. Treat the count as "a few people around me"
+rather than a number. If you want the old behaviour, drop the `min_rssi`
+argument; if the LEDs sit dark in a crowd, `NEAR_DBM` is too strict.
 
 It also shows the pixel handover: accept it while `syncflash` is running and it
 takes the strip, because **the newest module to ask for the LEDs wins**. A
