@@ -17,6 +17,14 @@ Full text of the license used by every library below is included at the bottom o
 | `adafruit_st7735r.mpy`                | https://github.com/adafruit/Adafruit_CircuitPython_ST7735R                | MIT     |
 | `neopixel.mpy`                        | https://github.com/adafruit/Adafruit_CircuitPython_NeoPixel               | MIT     |
 
+## Host-Side Tools
+
+`../tools/adafruit_miniqr.py` is vendored, not bundled for the badge — `flash.py` imports it on your computer to generate QR codes, so the badge never carries a QR library. Same MIT license as the libraries above; its SPDX header (Kazuhiko Arase 2009, ladyada/Adafruit 2021) is retained verbatim. Upstream: https://github.com/adafruit/Adafruit_CircuitPython_miniQR
+
+| Tool on disk                | Upstream repository                                              | License |
+|-----------------------------|------------------------------------------------------------------|---------|
+| `tools/adafruit_miniqr.py`  | https://github.com/adafruit/Adafruit_CircuitPython_miniQR        | MIT     |
+
 ## First-Party Modules
 
 `badgenet.py` is **not** a third-party library — it is part of this badge project and is covered by the repository's own [MIT license](../LICENSE). It lives in `lib/` because that is where CircuitPython looks for shared imports.

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Badge Flasher — CCC 2026 ProfileCard</title>
+<style>
+  :root {
+    --bg: #fbfbfd; --fg: #1d1d21; --muted: #6b6b76; --line: #e3e3e8;
+    --accent: #8250df; --ok: #2da44e; --err: #cf222e; --card: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --fg: #ececf1; --muted: #9a9aa6; --line: #2c2c33;
+      --accent: #a371f7; --ok: #3fb950; --err: #f85149; --card: #1e1e24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 3rem 1.5rem 5rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.02em; }
+  p.lede { color: var(--muted); margin: 0 0 2.5rem; }
+  fieldset { border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; margin: 0 0 1.5rem; background: var(--card); }
+  legend { padding: 0 .5rem; font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  label { display: block; margin-bottom: 1rem; }
+  label:last-of-type { margin-bottom: 0; }
+  .lbl { display: block; font-weight: 600; margin-bottom: .3rem; font-size: .95rem; }
+  .hint { display: block; color: var(--muted); font-size: .85rem; font-weight: 400; margin-top: .15rem; }
+  input[type=text] {
+    width: 100%; padding: .6rem .75rem; font-size: 1rem; font-family: inherit;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  .check { display: flex; gap: .5rem; align-items: flex-start; font-weight: 400; }
+  .check input { margin-top: .35rem; }
+  .row { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; margin-top: 1.5rem; }
+  button {
+    font: inherit; font-weight: 600; padding: .65rem 1.25rem; border-radius: 8px;
+    border: 1px solid transparent; cursor: pointer; background: var(--accent); color: #fff;
+  }
+  button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #status { color: var(--muted); font-size: .9rem; min-height: 1.4em; }
+  #preview { display: flex; gap: 1.25rem; flex-wrap: wrap; justify-content: center; }
+  canvas.screen {
+    width: 128px; height: 160px; image-rendering: pixelated;
+    border: 1px solid var(--line); border-radius: 3px; background: #000;
+  }
+  @media (min-width: 40rem) { canvas.screen { width: 192px; height: 240px; } }
+  ul#notes { color: var(--muted); font-size: .88rem; padding-left: 1.1rem; margin: 1rem 0 0; }
+  #error {
+    border: 1px solid var(--err); color: var(--err); border-radius: 8px;
+    padding: .75rem 1rem; margin-top: 1rem; font-size: .9rem;
+  }
+  #unsupported { border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; font-size: .9rem; color: var(--muted); margin-top: 1rem; }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+  a { color: var(--accent); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Put your face on your badge</h1>
+  <p class="lede">
+    Type your handles, plug in your Carolina Code Conference badge, and this
+    page writes the whole thing — photo, QR codes, libraries and code — straight
+    to it. Nothing is uploaded anywhere; it all happens in your browser.
+  </p>
+
+  <fieldset>
+    <legend>Your details</legend>
+
+    <label>
+      <span class="lbl">GitHub username</span>
+      <input type="text" id="github" placeholder="ubergeek42" autocomplete="off" spellcheck="false">
+      <span class="hint">Your avatar comes from here, and one side becomes a QR to your profile. A typo shows up as an identicon in the preview.</span>
+    </label>
+
+    <label>
+      <span class="lbl">LinkedIn <span style="font-weight:400">(optional)</span></span>
+      <input type="text" id="linkedin" placeholder="in/ubergeek42" autocomplete="off" spellcheck="false">
+      <span class="hint">Vanity name, <code>in/name</code>, or the full URL. Leave empty to skip that side.</span>
+    </label>
+
+    <label>
+      <span class="lbl">Handle under your photo <span style="font-weight:400">(optional)</span></span>
+      <input type="text" id="handle" placeholder="defaults to your GitHub username" autocomplete="off" spellcheck="false">
+      <span class="hint">Up to 20 characters. The printed badge already has your real name on it.</span>
+    </label>
+
+    <label class="check">
+      <input type="checkbox" id="repo">
+      <span>Add a side linking to this badge's source, so people who like it can make their own</span>
+    </label>
+
+    <div class="row">
+      <button id="preview-btn">Build preview</button>
+      <button id="flash" class="secondary" disabled>Write to badge…</button>
+      <button id="zip" class="secondary" disabled>Download .zip</button>
+    </div>
+    <p id="status"></p>
+    <div id="error" hidden></div>
+    <div id="unsupported" hidden>
+      Your browser can't write to the badge directly — that needs the File
+      System Access API, which today means Chrome or Edge on the desktop. Use
+      <strong>Download .zip</strong> and unzip it onto the CIRCUITPY drive
+      (keep the folder structure), or run <code>flash.py</code> from the repo.
+    </div>
+  </fieldset>
+
+  <fieldset id="previewWrap" hidden>
+    <legend>What your badge will show</legend>
+    <div id="preview"></div>
+    <ul id="notes"></ul>
+  </fieldset>
+
+  <footer>
+    <p>
+      <strong>How to use it:</strong> plug the badge in over USB and wait for the
+      <code>CIRCUITPY</code> drive to mount. Hit <em>Build preview</em>, check it
+      looks right, then <em>Write to badge…</em> and pick that drive when the
+      folder chooser opens. About 78 KB gets written and the badge restarts on
+      its own.
+    </p>
+    <p>
+      Once it's running: SW1 and SW2 step through the sides, SW3 toggles the
+      LEDs to save battery. Your details end up in <code>badge_profile.py</code>
+      on the drive — edit it in any text editor, save, and CircuitPython
+      reloads instantly.
+    </p>
+    <p>
+      Source, and the command-line version, at
+      <a href="https://github.com/ubergeek42/CarolinaCodeConferenceBadge2026">ubergeek42/CarolinaCodeConferenceBadge2026</a>.
+    </p>
+  </footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

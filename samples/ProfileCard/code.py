@@ -34,12 +34,19 @@ QR codes.
 #
 #   The captions are text only -- a QR's URL is baked into its bitmap,
 #   so regenerate the BMP (see README.md) if a link changes.
+#
+#   flash.py writes a badge_profile.py holding your own SIDES; if that
+#   file exists it wins, so re-flashing never touches this code and
+#   deleting it drops you back to the table below.
 # ==============================================================
-SIDES = (
-    ("photo", "/img/avatar.bmp", "UBERGEEK42", "",                  0xFFC878),
-    ("qr",    "/img/qr.bmp",     "LINKEDIN",   "in/ubergeek42",     0x0A66C2),
-    ("qr",    "/img/github.bmp", "GITHUB",     "this badge's code", 0x8250DF),
-)
+try:
+    from badge_profile import SIDES
+except ImportError:
+    SIDES = (
+        ("photo", "/img/avatar.bmp", "UBERGEEK42", "",                  0xFFC878),
+        ("qr",    "/img/qr.bmp",     "LINKEDIN",   "in/ubergeek42",     0x0A66C2),
+        ("qr",    "/img/github.bmp", "GITHUB",     "this badge's code", 0x8250DF),
+    )
 
 # Seconds of no button press before the badge advances on its own.
 # Set to 0 for button-only cycling.
