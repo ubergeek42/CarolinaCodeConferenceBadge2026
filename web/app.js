@@ -220,11 +220,13 @@ async function build() {
 
   files.set("badge_profile.py", new TextEncoder().encode(profileSource(sides)));
 
+  // All twelve at once. Sequentially this is twelve round trips, which is a
+  // visible stall on GitHub Pages and a painful one on conference wifi.
   status("fetching badge code…");
-  files.set("code.py", await fetchBinary("../samples/ProfileCard/code.py"));
-  for (const name of LIB_FILES) {
-    files.set(`lib/${name}`, await fetchBinary(`../lib/${name}`));
-  }
+  const wanted = [["code.py", "../samples/ProfileCard/code.py"],
+                  ...LIB_FILES.map((n) => [`lib/${n}`, `../lib/${n}`])];
+  const fetched = await Promise.all(wanted.map(([, url]) => fetchBinary(url)));
+  wanted.forEach(([dest], i) => files.set(dest, fetched[i]));
 
   state.files = files;
   state.sides = sides;
