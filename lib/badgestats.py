@@ -45,17 +45,20 @@ import gc
 import time
 
 MAGIC = b"CCST"
-VERSION = 1
+VERSION = 2
 
 LAUNCHER_RESERVED = 64          # nvm[0:64] belongs to the Launcher
 HEADER_AT = 64
 HEADER_LEN = 16
 RECORDS_AT = HEADER_AT + HEADER_LEN
-RECORD_LEN = 24
+RECORD_LEN = 48
 
-# Handles are truncated to fit the record. Eight characters is enough to
-# recognise a person and cheap enough to store 338 of them.
-HANDLE_LEN = 8
+# Handles and LinkedIn paths are truncated to fit the record. Widening the
+# record from 24 to 48 bytes to hold a link drops capacity from 338 contacts to
+# 169, which is still more people than anyone talks to at a conference -- and a
+# name you can act on later beats twice as many you can't.
+HANDLE_LEN = 12
+LINK_LEN = 20     # 6 + 12 + 10 fixed + 20 = RECORD_LEN
 
 # A gap longer than this makes the next sighting a separate encounter rather
 # than a continuation, so "3 meets over 40 minutes" stays distinguishable
@@ -80,13 +83,15 @@ def capacity(size=8192):
 
 
 class Contact:
-    __slots__ = ("mac", "handle", "secs", "meets", "best_rssi",
+    __slots__ = ("mac", "handle", "link", "secs", "meets", "best_rssi",
                  "first_session", "last_session", "last_secs", "flags", "_seen")
 
     def __init__(self, mac, handle="", secs=0, meets=1, best_rssi=-127,
-                 first_session=0, last_session=0, last_secs=0, flags=0):
+                 first_session=0, last_session=0, last_secs=0, flags=0,
+                 link=""):
         self.mac = bytes(mac)
         self.handle = handle
+        self.link = link
         self.secs = secs
         self.meets = meets
         self.best_rssi = best_rssi
@@ -105,17 +110,20 @@ class Contact:
             self.label, self.secs, self.meets, self.best_rssi)
 
 
+def _fixed(text, n):
+    raw = text.encode()[:n] if isinstance(text, str) else bytes(text)[:n]
+    return raw + bytes(n - len(raw))
+
+
 def pack_contact(c):
-    handle = c.handle.encode()[:HANDLE_LEN] if isinstance(c.handle, str) else c.handle
-    handle = handle + bytes(HANDLE_LEN - len(handle))
-    secs = min(c.secs, MAX_SECS)
-    rssi = c.best_rssi if c.best_rssi >= 0 else c.best_rssi + 256
-    return (c.mac + handle
-            + bytes((secs >> 8, secs & 0xFF,
-                     min(c.meets, 255), rssi & 0xFF,
+    return (c.mac + _fixed(c.handle, HANDLE_LEN)
+            + bytes((min(c.secs, MAX_SECS) >> 8, min(c.secs, MAX_SECS) & 0xFF,
+                     min(c.meets, 255),
+                     c.best_rssi if c.best_rssi >= 0 else c.best_rssi + 256,
                      c.first_session & 0xFF, c.last_session & 0xFF,
                      (c.last_secs >> 8) & 0xFF, c.last_secs & 0xFF,
-                     c.flags, 0)))
+                     c.flags, 0))
+            + _fixed(c.link, LINK_LEN))
 
 
 def unpack_contact(raw):
@@ -125,20 +133,24 @@ def unpack_contact(raw):
     mac = bytes(raw[0:6])
     if mac == b"\x00" * 6 or mac == b"\xff" * 6:
         return None                              # empty slot
-    handle = bytes(raw[6:6 + HANDLE_LEN]).rstrip(b"\x00")
-    try:
-        handle = handle.decode()
-    except Exception:
-        handle = ""
-    rssi = raw[17] - 256 if raw[17] > 127 else raw[17]
-    return Contact(mac, handle,
-                   secs=(raw[14] << 8) | raw[15],
-                   meets=raw[16] or 1,
+
+    def text(at, n):
+        try:
+            return bytes(raw[at:at + n]).rstrip(b"\x00").decode()
+        except Exception:
+            return ""                            # garbled; keep the record
+
+    base = 6 + HANDLE_LEN
+    rssi = raw[base + 3] - 256 if raw[base + 3] > 127 else raw[base + 3]
+    return Contact(mac, text(6, HANDLE_LEN),
+                   secs=(raw[base] << 8) | raw[base + 1],
+                   meets=raw[base + 2] or 1,
                    best_rssi=rssi,
-                   first_session=raw[18],
-                   last_session=raw[19],
-                   last_secs=(raw[20] << 8) | raw[21],
-                   flags=raw[22])
+                   first_session=raw[base + 4],
+                   last_session=raw[base + 5],
+                   last_secs=(raw[base + 6] << 8) | raw[base + 7],
+                   flags=raw[base + 8],
+                   link=text(base + 10, LINK_LEN))
 
 
 class Stats:
@@ -279,7 +291,7 @@ class Stats:
         return out
 
     # -- observing --------------------------------------------------------
-    def observe(self, mac, rssi, now=None, handle=""):
+    def observe(self, mac, rssi, now=None, handle="", link=""):
         """Record a sighting. Cheap: no nvm traffic, just arithmetic."""
         now = time.monotonic() if now is None else now
         mac = bytes(mac)
@@ -287,7 +299,8 @@ class Stats:
         if c is None:
             c = Contact(mac, handle[:HANDLE_LEN], secs=0, meets=1,
                         best_rssi=int(rssi), first_session=self.session,
-                        last_session=self.session, last_secs=int(now))
+                        last_session=self.session, last_secs=int(now),
+                        link=link[:LINK_LEN])
             c._seen = now
             self.contacts[mac] = c
             self.dirty = True
@@ -305,6 +318,10 @@ class Stats:
             c.best_rssi = int(rssi)
         if handle and not c.handle:
             c.handle = handle[:HANDLE_LEN]
+        if link and not c.link:
+            # First one wins, like the handle: a later garbled frame must not
+            # overwrite a link that already arrived intact.
+            c.link = link[:LINK_LEN]
         c.last_session = self.session
         c.last_secs = int(now) & 0xFFFF
         c._seen = now
@@ -339,12 +356,12 @@ class Stats:
         """Lines for a serial dump. `tools/badgedump.py` prints these."""
         lines = ["BADGESTATS v%d  session %d  uptime %s  %d contacts"
                  % (VERSION, self.session, hms(self.tomb_secs), len(self.contacts)),
-                 "%-10s %8s %6s %8s %s" % ("who", "together", "meets",
-                                           "closest", "last seen")]
+                 "%-12s %8s %5s %8s %-11s %s"
+                 % ("who", "together", "meets", "closest", "last seen", "linkedin")]
         for c in self.top(limit):
-            lines.append("%-10s %8s %6d %6ddBm  s%d+%s"
-                         % (c.label[:10], hms(c.secs), c.meets, c.best_rssi,
-                            c.last_session, hms(c.last_secs)))
+            lines.append("%-12s %8s %5d %6ddBm s%-3d+%-6s %s"
+                         % (c.label[:12], hms(c.secs), c.meets, c.best_rssi,
+                            c.last_session, hms(c.last_secs), c.link))
         if len(self.contacts) > limit:
             lines.append("... and %d more" % (len(self.contacts) - limit))
         return lines

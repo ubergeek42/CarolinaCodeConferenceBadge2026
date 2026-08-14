@@ -123,10 +123,10 @@ def find_badge(explicit=None):
 def write_bmp8(path, pixels, palette):
     """Write a 128x128 8-bit indexed uncompressed BMP.
 
-    This is the one format adafruit_imageload reliably reads on this badge,
-    and writing it by hand is deliberate: ImageMagick's BMP encoder picks its
-    bit depth from the colour count and no flag overrides it, so a two-colour
-    QR comes out 1-bit and a flat photo can come out 4-bit. Both fail to load.
+    Used for the photo, which needs its grey levels. QR codes go through
+    write_bmp1 instead. Writing these by hand is deliberate: ImageMagick's BMP
+    encoder picks its bit depth from the colour count and no flag overrides it,
+    so a flat photo can come out 4-bit, which does not load.
 
     pixels is 128*128 palette indices, top row first.
     """
@@ -146,6 +146,34 @@ def write_bmp8(path, pixels, palette):
     hdr = b"BM" + struct.pack("<IHHI", size, 0, 0, 14 + 40 + len(pal))
     hdr += struct.pack("<IiiHHIIiiII", 40, SIZE, SIZE, 1, 8, 0,
                        len(rows), 3780, 3780, 256, 256)
+    with open(path, "wb") as f:
+        f.write(hdr + pal + rows)
+
+
+def write_bmp1(path, pixels):
+    """Write a 128x128 **1-bit** BMP. `pixels` is 1 for a dark module.
+
+    A QR is two colours, so eight bits per pixel wastes 14 KB of a badge that
+    has about 45 KB free once its radio is up -- and that 14 KB is the
+    difference between four sides and three. Verified on hardware:
+    adafruit_imageload reads 1-bit BMPs fine. An older comment here claimed
+    otherwise, but the real problem was ImageMagick's encoder, not the depth.
+    """
+    if len(pixels) != SIZE * SIZE:
+        raise ValueError("expected %d pixels, got %d" % (SIZE * SIZE, len(pixels)))
+    pal = bytes((0, 0, 0, 0)) + bytes((255, 255, 255, 0))   # 0 = black, 1 = white
+    row_bytes = SIZE // 8                       # 16 bytes, already 4-byte aligned
+    rows = bytearray()
+    for y in range(SIZE - 1, -1, -1):           # BMP rows are bottom-up
+        bits = bytearray(row_bytes)
+        for x in range(SIZE):
+            if not pixels[y * SIZE + x]:        # light pixel -> bit set
+                bits[x // 8] |= 0x80 >> (x % 8)
+        rows += bits
+    hdr = b"BM" + struct.pack("<IHHI", 14 + 40 + len(pal) + len(rows), 0, 0,
+                              14 + 40 + len(pal))
+    hdr += struct.pack("<IiiHHIIiiII", 40, SIZE, SIZE, 1, 1, 0,
+                       len(rows), 3780, 3780, 2, 2)
     with open(path, "wb") as f:
         f.write(hdr + pal + rows)
 
@@ -260,7 +288,8 @@ def qr_to_bmp(url, path):
             if 0 <= mx < n and 0 <= my < n and qr.matrix[my, mx]:
                 pixels[y * SIZE + x] = 1
 
-    write_bmp8(path, pixels, [(255, 255, 255), (0, 0, 0)])
+    # 1-bit, not 8: see write_bmp1. Saves 14 KB of badge RAM per QR side.
+    write_bmp1(path, pixels)
     return n, scale
 
 

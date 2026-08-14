@@ -64,9 +64,9 @@ else:
     for line in st.report(limit=%d):
         print(M + 'R ' + line)
     for c in st.top(9999):
-        print(M + 'C ' + '%%s,%%s,%%d,%%d,%%d,%%d,%%d' %% (
+        print(M + 'C ' + '%%s,%%s,%%d,%%d,%%d,%%d,%%d,%%s' %% (
             ''.join('%%02x' %% b for b in c.mac), c.handle, c.secs, c.meets,
-            c.best_rssi, c.last_session, c.last_secs))
+            c.best_rssi, c.last_session, c.last_secs, c.link))
 """
 
 TOMBSTONE = """
@@ -153,7 +153,8 @@ def main():
                 pass
 
     if "--csv" in sys.argv:
-        print("mac,handle,seconds_together,meets,best_rssi,last_session,last_uptime")
+        print("mac,handle,seconds_together,meets,best_rssi,last_session,"
+              "last_uptime,linkedin")
         for ln in lines:
             if ln.startswith("C "):
                 print(ln[2:])

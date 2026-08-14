@@ -67,12 +67,45 @@ On battery an accepted module is written to `/mods/` and autoloads for good. **O
 
 There is no signing and no sandbox, and the design doesn't pretend otherwise. The threat model is "a friend pushes something silly to your badge": the button press is the security model, sizes are capped, a module that crashes or hangs is unloaded automatically, and there are two ways to boot without loading anything.
 
+## The NEARBY side
+
+A fourth side, generated rather than pre-rendered: it lists the badges you have
+been near, live neighbours first (strongest signal first), then padded from the
+nvm log with people seen earlier in the session. It exists *because* it is
+generated — about 3 KB of labels against the ~19 KB a 128×128 image costs, on a
+badge with roughly 45 KB free once the radio is up. There was no room for a
+fourth image side; there is plenty for a fourth text one.
+
+It says `near`, `close` or `around`, not metres. That is deliberate: the only
+distance signal available is RSSI, and `badgenet.rssi_to_unit()`'s calibration
+is still an unmeasured guess, so a number would be false precision. Set
+`PEERS_SIDE = False` to drop the side.
+
+Badges announce themselves twice: a `HELLO` every second carrying just the
+handle, and a fuller `CARD` every fifth beacon carrying handle **and** LinkedIn.
+Two kinds rather than one longer message, because badges already in the wild —
+and BadgeRadar — decode `HELLO`'s body as a bare handle, and a kind they don't
+know is simply ignored. The side shows only the handle; the link is for the log,
+so `tools/badgedump.py` can tell you who `ada` actually was.
+
+Both default to what is already printed on your other sides — the handle from
+the photo caption, the link from the LinkedIn caption — because the flashers
+write `badge_profile.py` and never touch `code.py`. Anything hardcoded would
+make every flashed badge introduce itself as whoever committed the line, which
+is exactly the bug that shipped for one commit.
+
+**Worth deciding before you wear it.** The handle and link go out as a plain
+broadcast, so anyone in range with an ESP32 can log them, not only other badges.
+The handle is already printed on the front of the badge, but a machine-readable
+link is different in kind. `LINK = None` broadcasts a handle and nothing else.
+
 ## The proximity log
 
 With `STATS = True` the badge remembers every badge it hears — how long you were near each other, how many separate times, and the closest you ever got — in `microcontroller.nvm`, which survives a flat battery and, unlike the filesystem, is writable while plugged in. Read it back with:
 
 ```sh
-python3 tools/badgedump.py            # who you were near, longest first
+python3 tools/badgedump.py            # who you were near, longest first,
+                                      # with the LinkedIn they broadcast
 python3 tools/badgedump.py --csv      # the same, machine readable
 python3 tools/badgedump.py --tombstone   # just how long the last run lasted
 ```

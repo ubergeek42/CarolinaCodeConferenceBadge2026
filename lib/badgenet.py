@@ -37,6 +37,38 @@ PROTO = 1
 HELLO = 0x01           # "I am here" beacon / handshake solicitation
 SHAKE = 0x02           # "I pick you" -- addressed, carries a card
 ACK   = 0x03           # "I picked you too" -- addressed, carries a card
+CARD  = 0x04           # "here are my details" -- handle + optional link
+
+# CARD is a separate kind rather than a longer HELLO on purpose. HELLO's body
+# is a bare handle, and badges already in the wild -- plus BadgeRadar -- decode
+# it as exactly that, so widening it would make every existing receiver display
+# a mangled name. A new kind is ignored by anything that does not know it,
+# which is what forward compatibility looks like on a broadcast channel with
+# no version negotiation.
+CARD_SEP = b"\x1f"     # unit separator: never appears in a handle or a URL
+
+
+def pack_card(handle, link=""):
+    """handle [+ link] for a CARD body."""
+    body = handle.encode() if isinstance(handle, str) else bytes(handle)
+    if link:
+        body += CARD_SEP + (link.encode() if isinstance(link, str) else bytes(link))
+    return body[:MAX_BODY]
+
+
+def unpack_card(body):
+    """(handle, link) from a CARD body. Never raises; garbage gives ("", "").
+
+    Undecodable bytes are a normal input on a shared channel, and a badge whose
+    name arrives corrupted should still be counted as present rather than
+    dropped -- so this returns empties and lets the caller fall back to the MAC.
+    """
+    try:
+        text = bytes(body).decode()
+    except Exception:
+        return "", ""
+    handle, _, link = text.partition(CARD_SEP.decode())
+    return handle, link
 
 BROADCAST_MAC = b"\xff\xff\xff\xff\xff\xff"
 

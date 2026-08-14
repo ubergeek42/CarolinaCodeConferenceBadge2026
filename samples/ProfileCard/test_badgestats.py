@@ -46,7 +46,7 @@ def fake_nvm(size=8192):
 # layout
 # ------------------------------------------------------------------
 print("layout")
-eq(bs.capacity(8192), 338, "338 contacts fit in 8 KB")
+eq(bs.capacity(8192), 169, "169 contacts fit in 8 KB at 48 bytes each")
 ok(bs.RECORDS_AT >= bs.LAUNCHER_RESERVED,
    "records start past the Launcher's reserved bytes")
 eq(bs.HEADER_AT, 64, "header sits right after the reserved region")
@@ -57,12 +57,14 @@ eq(bs.HEADER_AT, 64, "header sits right after the reserved region")
 # ------------------------------------------------------------------
 print("record codec")
 c = bs.Contact(b"\x02\x00\x00\x00\xab\xcd", "ada", secs=3600, meets=4,
-               best_rssi=-42, first_session=1, last_session=3, last_secs=1234)
+               best_rssi=-42, first_session=1, last_session=3, last_secs=1234,
+               link="in/ada")
 raw = bs.pack_contact(c)
 eq(len(raw), bs.RECORD_LEN, "a record is exactly RECORD_LEN")
 back = bs.unpack_contact(raw)
 eq(back.mac, c.mac, "mac survives")
 eq(back.handle, "ada", "handle survives")
+eq(back.link, "in/ada", "and so does the link")
 eq(back.secs, 3600, "seconds survive")
 eq(back.meets, 4, "meets survive")
 eq(back.best_rssi, -42, "negative rssi survives the round trip")
@@ -121,10 +123,12 @@ st2.observe(MAC, -80, now=62.0)
 eq(st2.contacts[MAC].best_rssi, -30, "best_rssi keeps the closest approach")
 
 # A handle learned later fills in a blank, but does not overwrite a known one.
-st2.observe(MAC, -50, now=63.0, handle="grace")
+st2.observe(MAC, -50, now=63.0, handle="grace", link="in/grace")
 eq(st2.contacts[MAC].handle, "grace", "a late handle is adopted")
-st2.observe(MAC, -50, now=64.0, handle="other")
+eq(st2.contacts[MAC].link, "in/grace", "and a late link too")
+st2.observe(MAC, -50, now=64.0, handle="other", link="in/other")
 eq(st2.contacts[MAC].handle, "grace", "but not replaced once known")
+eq(st2.contacts[MAC].link, "in/grace", "and neither is the link")
 
 
 # ------------------------------------------------------------------
@@ -233,6 +237,24 @@ ok("more" in lines[-1], "the truncation is stated, not silent")
 ok("met" in bs.Stats(nvm=fake_nvm()).summary() or
    "no badges" in bs.Stats(nvm=fake_nvm()).summary(), "empty summary is sane")
 ok(reloaded.summary().startswith("5 met"), "summary counts contacts")
+
+
+# ------------------------------------------------------------------
+# the CARD wire form -- handle plus an optional link
+# ------------------------------------------------------------------
+print("card codec")
+import badgenet as bn
+
+eq(bn.unpack_card(bn.pack_card("ada", "in/ada")), ("ada", "in/ada"),
+   "handle and link round-trip")
+eq(bn.unpack_card(bn.pack_card("ada")), ("ada", ""), "a link is optional")
+eq(bn.unpack_card(b""), ("", ""), "an empty body is not an error")
+eq(bn.unpack_card(b"\xff\xfe"), ("", ""),
+   "undecodable bytes give empties rather than raising")
+ok(len(bn.pack_card("x" * 300, "y" * 300)) <= bn.MAX_BODY,
+   "an absurd card is truncated to one frame, not silently oversized")
+ok(bn.CARD != bn.HELLO,
+   "CARD is its own kind, so badges that predate it just ignore it")
 
 
 print("PASSED %d, FAILED %d" % (PASS, FAIL))

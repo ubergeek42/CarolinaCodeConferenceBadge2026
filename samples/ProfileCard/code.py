@@ -59,12 +59,25 @@ SIDES = (
     ("qr",    "/img/repo.bmp",   "MAKE YOUR OWN", "flash a badge", 0x2DA44E),
 )
 
-# What nearby badges see, and what their logs record you as. Leave it blank to
-# use the name on your photo side, which is almost always what you want: the
-# flashers write /badge_profile.py and never touch this file, so a handle
-# hardcoded here would make every badge anyone flashes introduce itself as
-# whoever committed the line. Only 8 characters survive into another badge's log.
-HANDLE = ""
+# --- what this badge says about itself -------------------------
+# Both of these default to what is already printed on the sides above, and that
+# is the point: the flashers write /badge_profile.py and never touch this file,
+# so anything hardcoded here would make every badge anyone flashes introduce
+# itself as whoever committed the line.
+HANDLE = ""       # blank = the caption on your photo side
+LINK = ""         # blank = the second caption of your LinkedIn side; None = send no link
+
+# Worth a moment's thought before wearing this to a conference. The handle and
+# link go out as a plain broadcast on a shared channel, so anyone in range with
+# an ESP32 can log them -- not only other badges. The handle is already printed
+# on the front of the badge, but a machine-readable link is a different thing in
+# kind. It is on by default because the whole point of a business card is to be
+# found; set LINK = None to broadcast a handle and nothing else.
+
+# A generated side listing badges you have been near. About 3 KB, against the
+# ~19 KB an image side costs, because it is drawn from labels at runtime --
+# which is the only reason there is room for it at all.
+PEERS_SIDE = True
 
 # A badge provisioned by flash.py or the web flasher gets its own details in
 # /badge_profile.py, which wins over the table above. That is what lets a
@@ -76,13 +89,21 @@ except ImportError:
     pass                            # not flashed; the table above is it
 
 if not HANDLE:
-    # The caption on the photo side is the name this badge already shows to
+    # The caption on the photo side is the name the badge already shows to
     # anyone looking at it, so it is the honest thing to broadcast. Lowered
-    # because it is displayed shouty and stored in an 8-byte field.
+    # because it is displayed shouty and stored in a fixed-width field.
     HANDLE = "badge"
     for _style, _img, _l1, _l2, _a in SIDES:
         if _style == "photo" and _l1:
             HANDLE = _l1.lower()
+            break
+
+if LINK == "":
+    # Second caption of the LinkedIn side -- "in/ubergeek42".
+    LINK = ""
+    for _style, _img, _l1, _l2, _a in SIDES:
+        if _l1 == "LINKEDIN" and _l2:
+            LINK = _l2
             break
 
 # Seconds of no button press before the badge advances on its own.
@@ -201,11 +222,45 @@ display = adafruit_st7735r.ST7735R(
 
 
 # ------------------------------------------------------------------
+# The log, read before anything big is allocated
+#
+# Reading a slice of nvm costs an 8 KB allocation whatever the slice length, so
+# this has to happen while the heap is still open. Done after the three images
+# and the radio, it fails with a MemoryError on a badge that has plenty of room
+# for the data itself.
+# ------------------------------------------------------------------
+stats = None
+if STATS:
+    gc.collect()
+    try:
+        stats = bstats.Stats()
+        stats.load()
+        stats.tomb_label = POWER_LABEL
+        stats.begin_session()
+    except MemoryError:
+        stats = None
+        print("not enough memory for the proximity log; continuing without it")
+
+
+# ------------------------------------------------------------------
 # Scenes -- one per side, built once
 # ------------------------------------------------------------------
+_bg_cache = {}
+
+
 def solid_bg(color, w=128, h=160):
-    bmp = displayio.Bitmap(w, h, 1)
-    pal = displayio.Palette(1); pal[0] = color
+    """A full-screen fill, sharing one Bitmap per (size, colour).
+
+    A TileGrid may only sit in one Group, but several TileGrids can share one
+    Bitmap -- and the Bitmap is what costs memory. Four sides used to mean four
+    identical 2.5 KB fills; now the two white QR cards share one.
+    """
+    key = (w, h, color)
+    if key not in _bg_cache:
+        bmp = displayio.Bitmap(w, h, 1)
+        pal = displayio.Palette(1); pal[0] = color
+        _bg_cache[key] = (bmp, pal)
+    bmp, pal = _bg_cache[key]
     return displayio.TileGrid(bmp, pixel_shader=pal)
 
 
@@ -249,6 +304,11 @@ for style, bmp, line1, line2, accent in SIDES:
     # rather than by dying at boot with a traceback nobody will see. The badge
     # showing two of your three sides is a far better failure than a badge
     # showing the CircuitPython console.
+    # Collect before every load. adafruit_imageload needs the 16 KB bitmap *plus*
+    # working room while it decodes, so the peak during the third image is much
+    # higher than the steady state that follows it -- the badge ended up with
+    # 50 KB free having just failed to find 16 KB.
+    gc.collect()
     try:
         if style == "photo":
             lines = ((line1, choose_scale(line1), 0xFFFFFF, 146),)
@@ -271,6 +331,43 @@ for style, bmp, line1, line2, accent in SIDES:
 
 if not scenes:
     raise ValueError("no sides could be built -- check SIDES and /img")
+
+
+# ------------------------------------------------------------------
+# The NEARBY side -- generated, not an image
+#
+# Every other side is a 128x128 BMP costing ~19 KB, and by this point there is
+# nowhere near enough heap for a fourth. This one is a background plus seven
+# labels: about 3 KB, and it can show something that changes, which no
+# pre-rendered image can. Rows are only rewritten when the text actually
+# changes -- assigning a label's text dirties its box whether or not the
+# characters differ, and a full row of that every pass is 17 ms for nothing.
+# ------------------------------------------------------------------
+PEER_ROWS = 5
+peer_labels = []
+peers_index = -1
+
+if PEERS_SIDE:
+    peers_scene = displayio.Group()
+    peers_scene.append(solid_bg(0x000010))
+    _title = label.Label(terminalio.FONT, text="NEARBY", color=0x00CCFF, scale=2)
+    _title.anchor_point = (0.5, 0.0)
+    _title.anchored_position = (64, 6)
+    peers_scene.append(_title)
+    peers_count = label.Label(terminalio.FONT, text="", color=0x707070)
+    peers_count.anchor_point = (0.5, 0.0)
+    peers_count.anchored_position = (64, 26)
+    peers_scene.append(peers_count)
+    for _i in range(PEER_ROWS):
+        _row = label.Label(terminalio.FONT, text="", color=0xFFFFFF)
+        _row.anchor_point = (0.0, 0.0)
+        _row.anchored_position = (6, 44 + _i * 20)
+        peers_scene.append(_row)
+        peer_labels.append(_row)
+    scenes.append(peers_scene)
+    tints.append((0, 140, 200))
+    names.append("NEARBY")
+    peers_index = len(scenes) - 1
 
 
 # ------------------------------------------------------------------
@@ -339,7 +436,7 @@ if RADIO:
         # Collect first: the WiFi stack wants roughly 35 KB in one piece, and
         # this runs right after three 16 KB images were decoded into the heap.
         gc.collect()
-        radio = bn.Radio(channel=bn.CHANNEL, buffer_size=8192,
+        radio = bn.Radio(channel=bn.CHANNEL, buffer_size=4096,
                          tx_power=TX_POWER)
     except Exception as ex:
         # A badge with no radio is still a business card. Say so and carry
@@ -349,12 +446,7 @@ if RADIO:
 my_mac = radio.mac if radio else b"\x00\x00\x00\x00\x00\x00"
 peers = bn.PeerTable(ttl=25.0)
 
-stats = None
-if STATS:
-    stats = bstats.Stats()
-    stats.load()
-    stats.tomb_label = POWER_LABEL
-    stats.begin_session()
+
 
 
 def radio_send(kind, body=b""):
@@ -509,6 +601,53 @@ def set_mode(new):
     print("mode:", MODE_NAMES[mode])
 
 
+def draw_peers(now):
+    """Fill the NEARBY rows. Returns True if anything on screen changed.
+
+    Live neighbours first, strongest signal first, then padded from the nvm log
+    with people seen earlier this session -- so the side says something useful
+    the moment you look at it rather than only when someone is standing next to
+    you. Only badges with a handle or a MAC tail are shown; there is nothing
+    else honest to print.
+    """
+    rows = []
+    live = peers.nearby(now)
+    for p in live[:PEER_ROWS]:
+        # No metres. RSSI is a signal reading that correlates with distance on
+        # a good day, and the calibration here is still a guess, so this says
+        # near/close/around rather than inventing a number.
+        unit = bn.rssi_to_unit(p["rssi"])
+        how = "near" if unit < 0.34 else ("close" if unit < 0.67 else "around")
+        rows.append(("%-9s %s" % (peers.label(p)[:9], how), 0xFFFFFF))
+
+    if stats is not None and len(rows) < PEER_ROWS:
+        seen = {bytes(p["mac"]) for p in live}
+        earlier = [c for c in stats.top(PEER_ROWS * 2) if c.mac not in seen]
+        for c in earlier[:PEER_ROWS - len(rows)]:
+            rows.append(("%-9s %s" % (c.label[:9], bstats.hms(c.secs)), 0x808080))
+
+    changed = False
+    for i, lbl in enumerate(peer_labels):
+        text, color = rows[i] if i < len(rows) else ("", 0xFFFFFF)
+        if lbl.text != text:
+            lbl.text = text
+            changed = True
+        if lbl.color != color:
+            lbl.color = color
+            changed = True
+
+    if stats is not None:
+        summary = "%d near / %d met today" % (len(live), len(stats.contacts))
+    else:
+        summary = "%d near" % len(live)
+    if not rows:
+        summary = "nobody yet"
+    if peers_count.text != summary:
+        peers_count.text = summary
+        changed = True
+    return changed
+
+
 def next_side():
     global side, last_flip, need_draw
     side = (side + 1) % len(scenes)
@@ -534,6 +673,10 @@ last_lit = 0.0
 led_drops = 0
 need_draw = True
 beacon_body = HANDLE.encode()[:bn.MAX_BODY]
+card_body = bn.pack_card(HANDLE, LINK or "") if HANDLE else b""
+beacons = 0
+peers_dirty = True
+last_peers_draw = 0.0
 
 runtime.arm()
 
@@ -625,15 +768,23 @@ try:
         # --- radio in ---
         if radio is not None:
             for mac, kind, body, rssi, _t in radio.poll():
-                if kind == bn.HELLO:
-                    handle = ""
-                    try:
-                        handle = body.decode()[:12]
-                    except Exception:
-                        pass                      # garbled handle; keep the id
+                if kind == bn.HELLO or kind == bn.CARD:
+                    # HELLO is a bare handle; CARD adds the link. Both count as
+                    # "this badge is here", so they share one path.
+                    link = ""
+                    if kind == bn.CARD:
+                        handle, link = bn.unpack_card(body)
+                    else:
+                        try:
+                            handle = body.decode()[:12]
+                        except Exception:
+                            handle = ""       # garbled; the MAC still counts
                     peers.observe(mac, rssi, now=now, handle=handle)
                     if stats is not None:
-                        stats.observe(mac, rssi, now=now, handle=handle)
+                        stats.observe(mac, rssi, now=now, handle=handle,
+                                      link=link)
+                    if side == peers_index:
+                        peers_dirty = True
                 elif kind == bx.MODMSG and len(body) >= 2:
                     runtime.deliver((body[0] << 8) | body[1], mac,
                                     bytes(body[2:]), rssi)
@@ -650,7 +801,15 @@ try:
             if mode == SHARE and sender is not None:
                 sender.tick(now)
             elif now - last_beacon >= BEACON_SECS:
-                radio_send(bn.HELLO, beacon_body)
+                # HELLO stays a bare handle so BadgeRadar and any badge already
+                # in the wild still recognise us. The fuller CARD goes out a
+                # fifth as often, which is plenty -- it only has to land once
+                # per encounter, and this is still one frame per loop pass.
+                beacons += 1
+                if card_body and beacons % 5 == 0:
+                    radio_send(bn.CARD, card_body)
+                else:
+                    radio_send(bn.HELLO, beacon_body)
                 last_beacon = now
 
         # A transfer accepted mid-flight finishes here.
@@ -662,6 +821,16 @@ try:
         # --- modules ---
         if runtime.tick(now):
             need_draw = True
+
+        # --- the NEARBY side, if that is what we are showing ---
+        # Only while it is on screen: nothing here is worth spending a refresh
+        # on when the card is showing a photo instead. Aging peers out changes
+        # the list without any packet arriving, so it is also time-driven.
+        if side == peers_index and (peers_dirty or now - last_peers_draw > 2.0):
+            peers_dirty = False
+            last_peers_draw = now
+            if draw_peers(now):
+                need_draw = True
 
         # --- banner ---
         if mode == NORMAL:
