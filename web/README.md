@@ -58,6 +58,24 @@ same origin, so it always ships whatever the repo currently holds.
   boundary (54 characters) overflows instead of stepping up. Both this and
   `flash.py` compute it the corrected way, which is what keeps them identical.
 
+## It won't overwrite your work
+
+The badge is yours to hack, so the flasher never destroys a file it didn't
+create. A file is only written if one of these holds:
+
+1. it's byte-identical to what we'd write anyway (nothing happens),
+2. `.badge_flash.json` on the badge records that we wrote it last time, or
+3. it's an unmodified file from this repo — the Launcher that ships as
+   `code.py`, or the sample itself.
+
+Anything else is left alone and named in the notes, with a *Replace my edits*
+checkbox to override. So a stock badge flashes cleanly, a re-flash updates its
+own files, and a badge whose owner has been editing `code.py` keeps their work.
+
+`flash.py` scans the whole repo for case 3. The page can only fetch paths it
+knows, so it checks the Launcher and ProfileCard; a badge running some *other*
+untouched sample is conservatively preserved rather than replaced.
+
 ## Testing
 
 The parts that can be checked without a human are checked:

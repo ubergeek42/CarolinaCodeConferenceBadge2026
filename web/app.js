@@ -268,7 +268,7 @@ function showPreview(sides, previews) {
 // ------------------------------------------------------------------
 // Writing to the badge
 // ------------------------------------------------------------------
-async function writeToBadge(files) {
+async function writeToBadge(files, force = false) {
   const root = await window.showDirectoryPicker({ mode: "readwrite" });
 
   // Gate on boot_out.txt, not the volume name: the name is user-changeable,
@@ -285,10 +285,17 @@ async function writeToBadge(files) {
   }
   note(`badge: ${bootOut}`);
 
-  // Write only what differs. A stock badge already carries every library in
-  // LIB_FILES, so the normal job is your photo, your QR codes and two small
-  // text files -- and re-flashing the same details writes nothing at all.
+  // Write only what differs, and never destroy work we didn't create. A file
+  // may be overwritten if it is identical anyway, if the manifest says we
+  // wrote it last time, or if it is an unmodified file from the repo (the
+  // Launcher that ships as code.py, or the sample itself). Anything else is
+  // treated as the owner's and left alone.
+  const manifest = await readManifest(root);
+  const stock = await stockHashes();
+  const newManifest = {};
   let written = 0, skipped = 0, bytes = 0, seen = 0;
+  const preserved = [];
+
   for (const [path, data] of files) {
     status(`checking… ${++seen}/${files.size}`);
     const parts = path.split("/");
@@ -299,29 +306,80 @@ async function writeToBadge(files) {
       dir = await dir.getDirectoryHandle(part, { create: true });
     }
 
-    if (await sameOnDisk(dir, name, data)) { skipped++; continue; }
+    const digest = await sha256(data);
+    const existing = await readIfPresent(dir, name);
+    if (existing) {
+      if (await sha256(existing) === digest) {
+        skipped++;
+        newManifest[path] = digest;
+        continue;
+      }
+      const have = await sha256(existing);
+      if (!force && have !== manifest[path] && !stock.has(have)) {
+        preserved.push(path);
+        continue;
+      }
+    }
 
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable();
     await w.write(data);
     await w.close();
+    newManifest[path] = digest;
     written++;
     bytes += data.length;
   }
-  return { written, skipped, bytes };
+
+  if (written) {
+    const fh = await root.getFileHandle(MANIFEST, { create: true });
+    const w = await fh.createWritable();
+    await w.write(new TextEncoder().encode(
+      JSON.stringify({ version: 1, files: newManifest }, null, 1)));
+    await w.close();
+  }
+  return { written, skipped, bytes, preserved };
 }
 
-/** True if the badge already holds exactly these bytes. */
-async function sameOnDisk(dir, name, data) {
+const MANIFEST = ".badge_flash.json";
+
+async function sha256(data) {
+  const d = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function readIfPresent(dir, name) {
   try {
-    const existing = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile())
+    return new Uint8Array(await (await (await dir.getFileHandle(name)).getFile())
       .arrayBuffer());
-    if (existing.length !== data.length) return false;
-    for (let i = 0; i < data.length; i++) if (existing[i] !== data[i]) return false;
-    return true;
   } catch {
-    return false;                                   // not there yet
+    return null;                                    // not there yet
   }
+}
+
+async function readManifest(root) {
+  const data = await readIfPresent(root, MANIFEST);
+  if (!data) return {};
+  try {
+    return JSON.parse(new TextDecoder().decode(data)).files || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Hashes of the repo files a badge is likely to already be carrying, so a
+ * stock badge isn't mistaken for a customised one. flash.py scans the whole
+ * repo for this; the page can only fetch what it knows the names of, so an
+ * untouched *other* sample gets conservatively preserved rather than replaced.
+ */
+let _stock = null;
+async function stockHashes() {
+  if (_stock) return _stock;
+  _stock = new Set();
+  for (const p of ["../samples/Launcher/code.py", "../samples/ProfileCard/code.py"]) {
+    try { _stock.add(await sha256(await fetchBinary(p))); } catch { /* optional */ }
+  }
+  return _stock;
 }
 
 // ------------------------------------------------------------------
@@ -374,13 +432,19 @@ function totalBytes(files) {
 
 async function onFlash() {
   $("error").hidden = true;
+  const force = $("force").checked;
   try {
     if (!state.files) await build();
-    const { written, skipped, bytes } = await writeToBadge(state.files);
+    const { written, skipped, bytes, preserved } = await writeToBadge(state.files, force);
     status(written
       ? `done — ${written} files, ${(bytes / 1024).toFixed(1)} KB. The badge reloads on its own.`
-      : "already up to date — nothing needed writing.");
+      : (preserved.length ? "nothing written." : "already up to date — nothing needed writing."));
     if (skipped) note(`${skipped} files were already on the badge, unchanged (the stock badge ships the libraries).`);
+    if (preserved.length) {
+      note(`left alone, because they look like your own edits rather than mine: ${preserved.join(", ")}. ` +
+           "Save copies somewhere, then tick “replace my edits” to overwrite them.");
+      $("forceWrap").hidden = false;
+    }
     note("SW1/SW2 step through the sides, SW3 toggles the LEDs.");
     note("Your details are in badge_profile.py on the badge — edit and save, CircuitPython reloads instantly.");
   } catch (e) {

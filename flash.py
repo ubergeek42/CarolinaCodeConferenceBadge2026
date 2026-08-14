@@ -17,6 +17,8 @@ licensed tools/adafruit_miniqr.py.
 
 import argparse
 import glob
+import hashlib
+import json
 import os
 import shutil
 import struct
@@ -280,24 +282,55 @@ def profile_source(sides):
 
 # ------------------------------------------------------------------
 # Copying
+#
+# The badge is someone's to hack, so the flasher must never destroy work it
+# didn't create. Three questions decide whether a file may be overwritten:
+#
+#   1. Is it byte-identical to what we're about to write?  -> nothing to do
+#   2. Did we write it last time (MANIFEST records the hash)?  -> ours, update
+#   3. Is it an unmodified file from this repo (a stock sample, the Launcher
+#      that ships as code.py)?  -> not personal, safe to replace
+#
+# Anything else is assumed to be the owner's own work and is left alone, with
+# a note saying so. --force overrides the lot.
 # ------------------------------------------------------------------
-def copy_to(src, dest):
-    """Copy one file if it differs. Returns bytes written, or None if skipped.
+MANIFEST = ".badge_flash.json"
 
-    Skipping identical files matters more than it looks: a stock badge already
-    carries every library in LIB_FILES, so on the normal path this reduces the
-    job to your photo, your QR codes and two small text files. It also makes
-    re-running flash.py a no-op instead of 78 KB of pointless flash wear.
 
-    The fsync is not optional -- the badge volume is mounted async, so without
-    it a file can still be sitting in the host's cache when someone unplugs.
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_manifest(drive):
+    try:
+        with open(os.path.join(drive, MANIFEST)) as f:
+            return json.load(f).get("files", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def repo_hashes():
+    """Hashes of every file this repo ships, for question 3 above.
+
+    Scanned live rather than baked into a list, so a badge running any
+    unmodified sample -- not just the Launcher -- is recognised as stock.
     """
-    with open(src, "rb") as f:
-        data = f.read()
-    if os.path.isfile(dest):
-        with open(dest, "rb") as f:
-            if f.read() == data:
-                return None
+    out = set()
+    for sub in ("lib", "img", "samples"):
+        base = os.path.join(HERE, sub)
+        for root, _dirs, names in os.walk(base):
+            for n in names:
+                try:
+                    with open(os.path.join(root, n), "rb") as f:
+                        out.add(sha(f.read()))
+                except OSError:
+                    pass
+    return out
+
+
+def write_file(dest, data):
+    """Write and fsync. The badge volume is mounted async, so without the
+    fsync a file can still sit in the host's cache when someone unplugs."""
     parent = os.path.dirname(dest)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -305,7 +338,6 @@ def copy_to(src, dest):
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
-    return len(data)
 
 
 # ------------------------------------------------------------------
@@ -331,6 +363,8 @@ def main():
                     help="where to build assets (default: a temp dir)")
     ap.add_argument("--dry-run", action="store_true",
                     help="build everything, copy nothing")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite files even if they look hand-edited")
     args = ap.parse_args()
 
     stage = args.stage or tempfile.mkdtemp(prefix="badge-")
@@ -410,24 +444,52 @@ def main():
         return
 
     print("\nwriting to %s" % drive)
-    total = 0
-    written = 0
-    skipped = []
+    manifest = load_manifest(drive)
+    stock = repo_hashes()
+    total = written = 0
+    unchanged = []
+    preserved = []
+    new_manifest = {}
+
     for src, rel in payload:
         src = src if os.path.isabs(src) else os.path.join(HERE, src)
-        n = copy_to(src, os.path.join(drive, rel))
-        if n is None:
-            skipped.append(rel)
-        else:
-            total += n
-            written += 1
-            print("  %s" % rel)
+        with open(src, "rb") as f:
+            data = f.read()
+        dest = os.path.join(drive, rel)
+        digest = sha(data)
+
+        if os.path.isfile(dest):
+            with open(dest, "rb") as f:
+                existing = f.read()
+            if existing == data:
+                unchanged.append(rel)
+                new_manifest[rel] = digest
+                continue
+            if not args.force:
+                have = sha(existing)
+                if have != manifest.get(rel) and have not in stock:
+                    preserved.append(rel)
+                    continue
+
+        write_file(dest, data)
+        new_manifest[rel] = digest
+        total += len(data)
+        written += 1
+        print("  %s" % rel)
+
+    # Record what is ours so a later run can tell our files from the owner's.
+    # Files we preserved stay out of it: they are not ours to claim.
+    if written or not os.path.isfile(os.path.join(drive, MANIFEST)):
+        blob = json.dumps({"version": 1, "files": new_manifest},
+                          indent=1, sort_keys=True).encode()
+        write_file(os.path.join(drive, MANIFEST), blob)
+
     if hasattr(os, "sync"):
         os.sync()
 
-    if skipped:
-        libs = [s for s in skipped if s.startswith("lib/")]
-        other = [s for s in skipped if not s.startswith("lib/")]
+    if unchanged:
+        libs = [s for s in unchanged if s.startswith("lib/")]
+        other = [s for s in unchanged if not s.startswith("lib/")]
         parts = []
         if libs:
             parts.append("%d libraries already on the badge" % len(libs))
@@ -435,14 +497,24 @@ def main():
             parts.append("%d unchanged" % len(other))
         print("  (skipped %s)" % ", ".join(parts))
 
+    if preserved:
+        print("\nleft alone -- these look like your own edits, not mine:")
+        for rel in preserved:
+            print("    %s" % rel)
+        print("  Copy them somewhere safe and re-run with --force to replace"
+              " them.")
+
     if written:
         print("\ndone -- %d files, %.1f KB. The badge reloads on its own."
               % (written, total / 1024.0))
+    elif preserved:
+        print("\nnothing written.")
     else:
         print("\nalready up to date -- nothing needed writing.")
-    print("\nSW1/SW2 step through the sides, SW3 toggles the LEDs.")
-    print("Your details are in badge_profile.py on the badge -- edit and save,")
-    print("CircuitPython reloads instantly.")
+    if written:
+        print("\nSW1/SW2 step through the sides, SW3 toggles the LEDs.")
+        print("Your details are in badge_profile.py on the badge -- edit and")
+        print("save, CircuitPython reloads instantly.")
 
 
 if __name__ == "__main__":

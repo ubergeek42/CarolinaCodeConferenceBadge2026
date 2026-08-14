@@ -16,6 +16,8 @@
     }
   }
   * { box-sizing: border-box; }
+  /* display:flex on .check would otherwise beat the UA's [hidden] rule */
+  [hidden] { display: none !important; }
   body {
     margin: 0; padding: 3rem 1.5rem 5rem; background: var(--bg); color: var(--fg);
     font: 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -101,6 +103,11 @@
       <button id="flash" class="secondary" disabled>Write to badge…</button>
       <button id="zip" class="secondary" disabled>Download .zip</button>
     </div>
+    <label class="check" id="forceWrap" hidden>
+      <input type="checkbox" id="force">
+      <span>Replace my edits — overwrite files on the badge that I changed myself</span>
+    </label>
+
     <p id="status"></p>
     <div id="error" hidden></div>
     <div id="unsupported" hidden>
