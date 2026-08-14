@@ -76,6 +76,9 @@ BADGE_LIBS = (
 # The module a fresh badge starts life able to share. Both forms: the .py is
 # what autoloads and runs, the .mod is the compressed blob that goes on the
 # air, and a badge cannot build one itself (its zlib is decompress-only).
+# Only syncflash. Other modules in mods/ are deliberately NOT installed: a
+# badge cannot be offered something it already has, so if the flashers shipped
+# every module there would be nothing left for badges to hand each other.
 MOD_FILES = (
     "syncflash.py",
     "syncflash.mod",

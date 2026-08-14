@@ -527,8 +527,20 @@ NORMAL, LISTEN, SHARE = 0, 1, 2
 MODE_NAMES = ("NORMAL", "LISTEN", "SHARE")
 
 mode = NORMAL
-receiver = bx.Receiver(send=radio_send,
-                       ignore=[m.mod_id for m in runtime.mods])
+def installed():
+    """{mod_id: crc32} for every module already on this badge.
+
+    Keyed on the bytes rather than the name so a newer build of something you
+    already run can still reach you. Built from what is on disk, because that
+    is exactly what we would re-offer, so the two views cannot disagree.
+    """
+    out = {}
+    for name, blob, _flags in shareables():
+        out[badgemod.mod_id_for(name)] = bx.crc32(blob)
+    return out
+
+
+receiver = bx.Receiver(send=radio_send, ignore=installed())
 sender = None
 share_pick = 0
 last_result = ""

@@ -168,11 +168,16 @@ px = FakePixels()
 rt4 = badgemod.Runtime(pixels=px)
 a = rt4.load("NAME = 'a'\nWANTS_PIXELS = True\ndef tick(ctx, now): pass\n")
 b = rt4.load("NAME = 'b'\nWANTS_PIXELS = True\ndef tick(ctx, now): pass\n")
-ok(a.ctx.pixels is px, "first asker gets the pixels")
-ok(b.ctx.pixels is None, "second asker is told no, not given a share")
-eq(rt4.pixel_owner, "a", "owner tracked")
+# Newest wins, not first. The common case is a module just accepted off
+# another badge, and one that visibly does nothing because an older module
+# holds the strip is indistinguishable from a transfer that failed.
+ok(b.ctx.pixels is px, "the newest asker gets the pixels")
+ok(a.ctx.pixels is None, "and the previous owner is told it lost them")
+eq(rt4.pixel_owner, "b", "ownership moved")
 rt4.unload("a")
-eq(rt4.pixel_owner, None, "ownership released on unload")
+eq(rt4.pixel_owner, "b", "unloading a non-owner leaves ownership alone")
+rt4.unload("b")
+eq(rt4.pixel_owner, None, "ownership released when the owner goes")
 eq(px.last, (0, 0, 0), "and the strip was blanked")
 
 

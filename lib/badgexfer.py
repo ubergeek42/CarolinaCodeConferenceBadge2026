@@ -295,7 +295,7 @@ class Receiver:
     making the second sender wait a lap.
     """
 
-    def __init__(self, send=None, ignore=(), max_blob=MAX_BLOB):
+    def __init__(self, send=None, ignore=None, max_blob=MAX_BLOB):
         self.send = send
         self.state = IDLE
         self.offer = None
@@ -310,7 +310,21 @@ class Receiver:
         self.dupes = 0
         self.rejected = {}          # mod_id -> when the rejection expires
         self.error = None
-        self.mine = set(ignore)     # mod_ids we already have; don't re-offer
+        # mod_id -> crc32 of the copy we already hold. Keyed on the *bytes*, not
+        # just the name: a newer build of a module you already run has the same
+        # mod_id and must still be able to reach you, or a fix can never
+        # propagate past the first badge.
+        if ignore is None:
+            self.mine = {}
+        elif isinstance(ignore, dict):
+            self.mine = dict(ignore)
+        else:
+            self.mine = {mod_id: None for mod_id in ignore}   # any version
+        # The last offer we turned down without asking, and why. Exposed so the
+        # UI can say so: an offer that vanishes silently is indistinguishable
+        # from a radio that is not working, which is exactly the bug this
+        # attribute exists to prevent.
+        self.declined = None        # (name, reason, when)
         self._last_req = 0.0
 
     # -- inbound ----------------------------------------------------------
@@ -326,13 +340,19 @@ class Receiver:
         if offer is None:
             return
         if offer.total > self.max_blob:
-            return                                  # too big; not for us
+            self.declined = (offer.name, "too big", now)
+            return
         if offer.mod_id in self.mine:
-            return                                  # already have it
+            known = self.mine[offer.mod_id]
+            if known is None or known == offer.crc:
+                self.declined = (offer.name, "have it", now)
+                return
+            # Same module, different bytes: a newer build. Let it through.
         exp = self.rejected.get(offer.mod_id)
         if exp is not None:
             if now < exp:
-                return                              # you were told no
+                self.declined = (offer.name, "declined", now)
+                return
             del self.rejected[offer.mod_id]
         if self.offer is None:
             self._begin(mac, offer, rssi, now)
@@ -458,7 +478,7 @@ class Receiver:
             return self._fail("inflate: %s %s" % (type(ex).__name__, ex))
         offer = self.offer
         self.state = COMPLETE
-        self.mine.add(offer.mod_id)
+        self.mine[offer.mod_id] = offer.crc
         return offer, source, blob
 
     def _fail(self, why):

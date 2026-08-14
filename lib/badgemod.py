@@ -267,13 +267,22 @@ class Runtime:
             group = displayio.Group()
             self.overlay.append(group)
 
-        # The NeoPixels have exactly one owner. Two modules both filling the
-        # strip would fight every frame and look broken, so the first to ask
-        # gets them and later ones are told no (ctx.pixels is None) rather
-        # than silently sharing.
+        # The NeoPixels have exactly one owner -- two modules both filling the
+        # strip would fight every frame and look broken. The *newest* asker
+        # wins, and the previous owner is told it lost them.
+        #
+        # Newest rather than first, deliberately: the common case is a module
+        # someone has just accepted off another badge, and a module you chose
+        # that then does nothing visible because an older one holds the strip
+        # is indistinguishable from a transfer that failed.
         wants = glb.get("WANTS_PIXELS", False) if want_pixels is None else want_pixels
         pixels = None
-        if wants and self.pixel_owner is None:
+        if wants and self.pixels is not None:
+            previous = self.get(self.pixel_owner) if self.pixel_owner else None
+            if previous is not None:
+                previous.ctx.pixels = None
+                print("[badgemod] %s took the pixels from %s"
+                      % (name, previous.name))
             pixels = self.pixels
 
         ctx = Ctx(name, mod_id_for(name), group, pixels=pixels,

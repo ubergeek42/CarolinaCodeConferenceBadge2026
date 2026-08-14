@@ -50,6 +50,38 @@ for the mistakes above:
 python3 tools/mkmod.py mods/syncflash.py --install
 ```
 
+## Trying a transfer
+
+**A badge will not offer you a module you already have.** The flashers install
+`syncflash` on every badge, so two freshly flashed badges have nothing to send
+each other — SHARE broadcasts, LISTEN hears it, and declines. It now says so
+(`syncflash: have it`) instead of showing nothing, which is how this was found.
+
+So put something on one badge that the other lacks:
+
+```sh
+python3 tools/mkmod.py mods/nearby.py --install   # sender only
+```
+
+Then SHARE on that badge, LISTEN on the other, and SW1/SW2 to accept. `nearby`
+is two chunks — about 40 ms of air — so it lands as fast as you can look up.
+
+"Already have it" is judged on the **bytes**, not the name: a newer build of a
+module you are running has the same `mod_id` and will still be offered to you,
+because otherwise a fix could never propagate past the first badge.
+
+## nearby
+
+One LED per badge in earshot, up to five. Small on purpose — it is the module
+to hand around when demonstrating that handing modules around works, and at 438
+compressed bytes it is the cheapest possible thing to put on the air.
+
+It also shows the pixel handover: accept it while `syncflash` is running and it
+takes the strip, because **the newest module to ask for the LEDs wins**. A
+module you just chose to accept that then does nothing visible is
+indistinguishable from a transfer that failed, so ownership follows the most
+recent decision rather than the oldest.
+
 ## syncflash
 
 Badges near each other walk the same colour cycle at the same moment, so a knot
