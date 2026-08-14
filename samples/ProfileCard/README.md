@@ -2,6 +2,14 @@
 
 A digital badge that cycles through a photo card and any number of QR cards. As shipped: your photo with your handle underneath, a QR to your LinkedIn, and a QR to this repo. Press SW1 or SW2 for the next side; SW3 toggles the LEDs off to save battery. Copy this sample's `code.py` over the top-level `code.py` to run it (or pick it from the Launcher menu).
 
+## Booting into it without losing the picker
+
+[`flash.py`](../../flash.py) and the [web flasher](../../web/) install this sample under `/samples/ProfileCard/` and put [`autostart.py`](autostart.py) at the top level as `code.py`. That shim runs ProfileCard immediately on power-up, and hands off to the Launcher's picker if any button is held while the badge boots — so the badge is a business card by default and every other sample is still one button away.
+
+It works that way because the picker's memory can't be set from a computer. The Launcher stores its last pick in `microcontroller.nvm`, which is internal flash reachable only from CircuitPython — no host-side flasher can write it, and with nvm unset the Launcher falls back to whichever sample sorts first alphabetically. A shim is the only way to make this one the default without a human picking it once.
+
+The shim deliberately ignores the remembered selection: the badge returns to your card on every reset. Choosing another sample from the picker still runs it, it just doesn't become the new default. For the stock behaviour back, copy `samples/Launcher/code.py` over the top-level `code.py`.
+
 Every side is a pre-rendered BMP in `/img/` — nothing is drawn or encoded on the badge, so switching is instant.
 
 ## How to personalize

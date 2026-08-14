@@ -62,21 +62,34 @@ same origin, so it always ships whatever the repo currently holds.
 
 Two classes of file, two rules:
 
-- **ProfileCard's own files** — `code.py`, `badge_profile.py` and the images —
-  are what installing *means*, so they're replaced whenever they differ. If
-  you've hand-edited `code.py` on the badge and want to keep it, copy it off
-  first.
-- **The badge's libraries** in `lib/` are not ours. Its owner may have upgraded
-  or patched them, so they're written only when **missing**. One that exists
-  and differs is left alone and named in the notes, with a checkbox (or
-  `--force`) to replace it anyway.
+- **ProfileCard's own files** — `code.py`, `badge_profile.py`, the images and
+  `samples/ProfileCard/code.py` — are what installing *means*, so they're
+  replaced whenever they differ. If you've hand-edited one on the badge and
+  want to keep it, copy it off first.
+- **The badge's own files** — the libraries in `lib/` and the Launcher — are
+  not ours. Its owner may have upgraded or patched them, so they're written
+  only when **missing**. One that exists and differs is left alone and named
+  in the notes, with a checkbox (or `--force`) to replace it anyway.
 
 Nothing else on the drive is touched at all — other samples, your own
 experiments, `settings.toml` are all left where they are.
 
-In practice a stock badge takes five files (`code.py`, `badge_profile.py` and
-three BMPs, ~60 KB) because it already ships every library ProfileCard needs,
-byte-identical. Re-running with the same details writes nothing.
+In practice a stock badge takes six files (~63 KB) because it already ships
+every library ProfileCard needs, byte-identical. Re-running with the same
+details writes nothing.
+
+## Boot behaviour
+
+`code.py` is not ProfileCard itself but [`autostart.py`](../samples/ProfileCard/autostart.py),
+a shim: it runs ProfileCard straight away, or hands off to the Launcher's
+picker if a button is held while the badge boots. So the picker survives
+flashing, and the badge still comes up as a business card without anyone
+having to choose it first.
+
+That indirection exists because the picker's memory is unreachable from here.
+The Launcher keeps its last selection in `microcontroller.nvm` — internal
+flash, writable only by CircuitPython — so no amount of file writing can
+preseed it, and unset nvm falls back to the alphabetically first sample.
 
 ## Testing
 

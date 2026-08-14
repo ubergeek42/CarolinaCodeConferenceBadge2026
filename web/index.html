@@ -105,7 +105,7 @@
     </div>
     <label class="check" id="forceWrap" hidden>
       <input type="checkbox" id="force">
-      <span>Replace the badge's libraries — overwrite the <code>lib/</code> files that differ from mine</span>
+      <span>Replace the badge's own files — overwrite its <code>lib/</code> and Launcher copies that differ from mine</span>
     </label>
 
     <p id="status"></p>
@@ -129,12 +129,14 @@
       <strong>How to use it:</strong> plug the badge in over USB and wait for the
       <code>CIRCUITPY</code> drive to mount. Hit <em>Build preview</em>, check it
       looks right, then <em>Write to badge…</em> and pick that drive when the
-      folder chooser opens. About 78 KB gets written and the badge restarts on
-      its own.
+      folder chooser opens. Five files on a stock badge, and it restarts on its
+      own.
     </p>
     <p>
       Once it's running: SW1 and SW2 step through the sides, SW3 toggles the
-      LEDs to save battery. Your details end up in <code>badge_profile.py</code>
+      LEDs to save battery. The badge boots straight to your card — hold any
+      button while it starts up to get the sample picker instead, which is
+      left exactly where it was. Your details end up in <code>badge_profile.py</code>
       on the drive — edit it in any text editor, save, and CircuitPython
       reloads instantly.
     </p>

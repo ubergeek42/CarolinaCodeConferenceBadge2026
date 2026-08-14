@@ -224,13 +224,29 @@ async function build() {
 
   files.set("badge_profile.py", new TextEncoder().encode(profileSource(sides)));
 
-  // All twelve at once. Sequentially this is twelve round trips, which is a
+  // All of them at once. Sequentially this is a dozen round trips, which is a
   // visible stall on GitHub Pages and a painful one on conference wifi.
+  //
+  // code.py is the autostart shim, not ProfileCard itself: it boots straight
+  // into the card, and holding a button at boot gets the Launcher's picker.
+  // Copying ProfileCard over code.py directly would take the picker off the
+  // boot path, and the picker's own memory can't be preseeded from here --
+  // it lives in nvm, which only CircuitPython can write.
   status("fetching badge code…");
-  const wanted = [["code.py", "../samples/ProfileCard/code.py"],
-                  ...LIB_FILES.map((n) => [`lib/${n}`, `../lib/${n}`])];
+  const wanted = [
+    ["code.py", "../samples/ProfileCard/autostart.py"],
+    ["samples/ProfileCard/code.py", "../samples/ProfileCard/code.py"],
+    ["samples/Launcher/code.py", "../samples/Launcher/code.py"],
+    ...LIB_FILES.map((n) => [`lib/${n}`, `../lib/${n}`]),
+  ];
   const fetched = await Promise.all(wanted.map(([, url]) => fetchBinary(url)));
   wanted.forEach(([dest], i) => files.set(dest, fetched[i]));
+
+  // Files that belong to the badge rather than to ProfileCard: written only
+  // when missing, never overwritten. The Launcher is here so a badge that
+  // lost its picker gets one back, without clobbering a customised one.
+  state.support = new Set(["samples/Launcher/code.py",
+                           ...LIB_FILES.map((n) => `lib/${n}`)]);
 
   state.files = files;
   state.sides = sides;
@@ -292,9 +308,11 @@ async function writeToBadge(files, force = false) {
   note(`badge: ${bootOut}`);
 
   // Two classes of file, two rules. ProfileCard's own files -- code.py,
-  // badge_profile.py, the images -- are what installing means, so they get
-  // replaced. The libraries in lib/ belong to the badge rather than to us and
-  // its owner may have upgraded them, so those are written only when missing.
+  // badge_profile.py, the images, the sample -- are what installing means, so
+  // they get replaced. The libraries and the Launcher belong to the badge
+  // rather than to us and its owner may have changed them, so those are
+  // written only when missing.
+  const support = state.support || new Set();
   let written = 0, skipped = 0, bytes = 0, seen = 0;
   const preserved = [];
 
@@ -302,7 +320,7 @@ async function writeToBadge(files, force = false) {
     status(`checking… ${++seen}/${files.size}`);
     const parts = path.split("/");
     const name = parts[parts.length - 1];
-    const ours = !path.startsWith("lib/");
+    const ours = !support.has(path);
 
     let dir = root;
     for (const part of parts.slice(0, -1)) {
@@ -376,7 +394,11 @@ async function onPreview() {
   $("error").hidden = true;
   try {
     await build();
-    status(`ready — ${state.files.size} files, ${(totalBytes(state.files) / 1024).toFixed(1)} KB`);
+    // The payload is everything the badge could need; most of it is already
+    // there, so quote what is staged rather than implying it all gets written.
+    status(`ready — ${state.files.size} files staged, `
+         + `${(totalBytes(state.files) / 1024).toFixed(1)} KB. `
+         + "Only what's missing or changed gets written.");
     $("flash").disabled = false;
     $("zip").disabled = false;
   } catch (e) { fail(e); }
@@ -399,8 +421,8 @@ async function onFlash() {
       : (preserved.length ? "nothing written." : "already up to date — nothing needed writing."));
     if (skipped) note(`${skipped} files were already on the badge, unchanged (the stock badge ships the libraries).`);
     if (preserved.length) {
-      note(`left alone, because your copies differ from mine and they're the badge's libraries rather than ProfileCard's: ${preserved.join(", ")}. ` +
-           "Tick “replace the badge's libraries” if you want mine instead.");
+      note(`left alone, because your copies differ from mine and they belong to the badge rather than to ProfileCard: ${preserved.join(", ")}. ` +
+           "Tick “replace the badge's own files” if you want mine instead.");
       $("forceWrap").hidden = false;
     }
     note("SW1/SW2 step through the sides, SW3 toggles the LEDs.");

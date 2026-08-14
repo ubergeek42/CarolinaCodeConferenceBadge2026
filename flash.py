@@ -394,13 +394,24 @@ def main():
         f.write(profile_source(sides))
 
     # --- payload: (source, destination, is_ours) ---
-    payload = [("samples/ProfileCard/code.py", "code.py", True),
+    #
+    # ProfileCard is installed as a sample and the top-level code.py becomes a
+    # shim that runs it -- holding a button at boot gets the Launcher's picker
+    # instead. Copying ProfileCard straight over code.py, which is what this
+    # did before, took the picker off the boot path altogether.
+    payload = [("samples/ProfileCard/autostart.py", "code.py", True),
+               ("samples/ProfileCard/code.py", "samples/ProfileCard/code.py", True),
                (os.path.join(stage, "badge_profile.py"), "badge_profile.py", True)]
     for style, img, _, _, _ in sides:
         name = img.lstrip("/")
         payload.append((os.path.join(stage, name), name, True))
     for name in LIB_FILES:
         payload.append((os.path.join(HERE, "lib", name), "lib/" + name, False))
+
+    # The picker is what the shim hands off to, so make sure it exists. Marked
+    # as not-ours: a badge that already has one keeps it, however it has been
+    # modified. This only restores the ability on a badge that lost it.
+    payload.append(("samples/Launcher/code.py", "samples/Launcher/code.py", False))
 
     missing = [s for s, _, _ in payload if not os.path.isfile(
         s if os.path.isabs(s) else os.path.join(HERE, s))]

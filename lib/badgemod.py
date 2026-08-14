@@ -178,11 +178,24 @@ class Runtime:
 
     # -- watchdog ---------------------------------------------------------
     def arm(self):
-        """Arm the watchdog in RAISE mode. Safe to call when unavailable."""
+        """Arm the watchdog in RAISE mode. Safe to call when unavailable.
+
+        The mode is cleared first, and the whole thing is wrapped, because of
+        a sharp edge found the hard way: after a WatchDogTimeout has fired,
+        assigning `timeout` while the mode is still RAISE raises
+        `espidf.IDFError: Invalid argument`. Re-arming after a rescue is
+        exactly when that happens, so an unguarded arm() turns "we saved the
+        badge from a bad module" into "we crashed on the way back".
+        """
         if _wd is None or self._armed:
             return False
-        _wd.timeout = self.watchdog_secs
-        _wd.mode = _watchdog.WatchDogMode.RAISE
+        try:
+            _wd.mode = None
+            _wd.timeout = self.watchdog_secs
+            _wd.mode = _watchdog.WatchDogMode.RAISE
+        except Exception as ex:
+            print("[badgemod] watchdog unavailable: %s %s" % (type(ex).__name__, ex))
+            return False
         self._armed = True
         return True
 
@@ -272,9 +285,15 @@ class Runtime:
         """
         import os
         try:
-            names = sorted(n for n in os.listdir(directory) if n.endswith(".py"))
+            names = sorted(n for n in os.listdir(directory)
+                           if n.endswith(".py") and not n.startswith("."))
         except OSError:
             return []
+        # The dot filter is not paranoia. Copying a module onto CIRCUITPY from
+        # a Mac leaves an AppleDouble sidecar next to it -- `._syncflash.py`,
+        # which ends in .py and is a small binary file. Without this, the
+        # first thing autoload does on a freshly loaded badge is try to
+        # compile it.
         return [m for m in (self.load_file(directory + "/" + n) for n in names) if m]
 
     def get(self, name):
