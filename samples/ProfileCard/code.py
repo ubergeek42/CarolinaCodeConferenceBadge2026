@@ -1,18 +1,19 @@
 """
 code.py -- ProfileCard: Carolina Code Conference sample
 =======================================================
-A two-sided badge. One side is your photo plus your handle, the
-other is a QR code pointing at your LinkedIn. SW1 or SW2 flips.
+A three-sided badge. SW1 or SW2 cycles through your photo plus
+handle, a QR to your LinkedIn, and a QR to this badge's source.
 
 Controls
 --------
-  SW1 (IO1) / SW2 (IO2)  -- flip to the other side
+  SW1 (IO1) / SW2 (IO2)  -- next side (photo -> LinkedIn -> GitHub)
   SW3 (IO43)             -- LEDs on/off. The NeoPixels are the
                             biggest current draw on the board, so
                             turning them off stretches the CR123A.
 
-Both images are pre-rendered BMPs in /img/ -- see README.md for the
-one-liner that converts your own photo and regenerates the QR.
+All three images are pre-rendered BMPs in /img/ -- see README.md for
+the one-liner that converts your photo and the script that builds the
+QR codes.
 """
 
 # ==============================================================
@@ -21,18 +22,27 @@ one-liner that converts your own photo and regenerates the QR.
 #   The printed badge already carries your real name, so the photo
 #   side just shows your handle.
 #
-#   The QR image itself is /img/qr.bmp -- changing LINKEDIN here
-#   only changes the caption text, not the code. Regenerate the
-#   BMP (see README.md) if your URL changes.
+#   SIDES is the whole rotation, in order. Comment a line out to drop
+#   that side; add one to extend it. Two or five sides work the same
+#   as three.
+#
+#     style   "photo" -- dark card, one line of large type below the
+#                        image (line 2 is ignored)
+#             "qr"    -- white card, two small caption lines
+#     accent  tints the LEDs on that side, and colours line 1 on a
+#             "qr" card
+#
+#   The captions are text only -- a QR's URL is baked into its bitmap,
+#   so regenerate the BMP (see README.md) if a link changes.
 # ==============================================================
-HANDLE   = "UBERGEEK42"
-LINKEDIN = "in/ubergeek42"
+SIDES = (
+    ("photo", "/img/avatar.bmp", "UBERGEEK42", "",                  0xFFC878),
+    ("qr",    "/img/qr.bmp",     "LINKEDIN",   "in/ubergeek42",     0x0A66C2),
+    ("qr",    "/img/github.bmp", "GITHUB",     "this badge's code", 0x8250DF),
+)
 
-PHOTO_BMP = "/img/avatar.bmp"
-QR_BMP    = "/img/qr.bmp"
-
-# Seconds of no button press before the badge flips on its own.
-# Set to 0 for button-only flipping.
+# Seconds of no button press before the badge advances on its own.
+# Set to 0 for button-only cycling.
 AUTO_FLIP_SECS = 0
 
 # Whether the NeoPixels start lit. SW3 toggles them either way --
@@ -148,27 +158,31 @@ def build_scene(bmp_path, bg_color, image_y, lines):
     return scene
 
 
-# Side A -- photo on black, handle centred in the band below it.
-photo_scene = build_scene(
-    PHOTO_BMP, 0x000000, 4,
-    (
-        (HANDLE, choose_scale(HANDLE), 0xFFFFFF, 146),
-    ),
-)
+# Build every side listed in SIDES. A "photo" card is dark with the
+# handle in the largest type that fits; a "qr" card is white so the
+# bitmap's own quiet zone blends to the screen edge, which is what
+# scanners want. Everything else about the two is the same, which is
+# why one table drives both.
+scenes = []
+tints = []
+names = []
 
-# Side B -- QR on white. The BMP already carries its own white quiet
-# zone, so a white background lets it blend edge to edge.
-qr_scene = build_scene(
-    QR_BMP, 0xFFFFFF, 6,
-    (
-        ("LINKEDIN", 1, 0x0A66C2, 143),
-        (LINKEDIN,   1, 0x303030, 154),
-    ),
-)
+for style, bmp, line1, line2, accent in SIDES:
+    if style == "photo":
+        lines = ((line1, choose_scale(line1), 0xFFFFFF, 146),)
+        scenes.append(build_scene(bmp, 0x000000, 4, lines))
+    else:
+        lines = ((line1, 1, accent, 143),)
+        if line2:
+            lines += ((line2, 1, 0x303030, 154),)
+        scenes.append(build_scene(bmp, 0xFFFFFF, 6, lines))
+    tints.append(((accent >> 16) & 0xFF, (accent >> 8) & 0xFF, accent & 0xFF))
+    names.append(line1)
 
-scenes = (photo_scene, qr_scene)
-# Per-side LED tint: warm white for the photo, LinkedIn blue for the QR.
-tints = ((255, 200, 120), (10, 102, 194))
+# Commenting out every side leaves nothing to show -- say so plainly
+# rather than dying on an index error three lines later.
+if not scenes:
+    raise ValueError("SIDES is empty -- enable at least one side")
 
 
 # ------------------------------------------------------------------
@@ -184,20 +198,19 @@ led_prev = led_button.value
 last_flip = time.monotonic()
 leds_on = LEDS_AT_BOOT
 
-print("ProfileCard: %s / %s (handle scale=%d)"
-      % (HANDLE, LINKEDIN, choose_scale(HANDLE)))
-print("  SW1/SW2 flip, SW3 toggles LEDs (now %s); auto-flip %s"
+print("ProfileCard: %d sides -- %s" % (len(scenes), " -> ".join(names)))
+print("  SW1/SW2 next side, SW3 toggles LEDs (now %s); auto-advance %s"
       % ("on" if leds_on else "off",
          "off" if AUTO_FLIP_SECS <= 0 else "%ds" % AUTO_FLIP_SECS))
 
 
-def flip():
+def next_side():
     global side, last_flip
-    side = 1 - side
+    side = (side + 1) % len(scenes)
     display.root_group = scenes[side]
     display.refresh()
     last_flip = time.monotonic()
-    print("side:", "QR" if side else "PHOTO")
+    print("side:", names[side])
 
 
 # ------------------------------------------------------------------
@@ -206,18 +219,18 @@ def flip():
 while True:
     now = time.monotonic()
 
-    # Flip on the press edge of either front button. OR-ing the two
+    # Advance on the press edge of either front button. OR-ing the two
     # edges means it doesn't matter which one an attendee grabs.
     values = [btn.value for btn in flip_buttons]
     pressed = any((not v) and p for v, p in zip(values, prev))
     prev = values
 
     if pressed:
-        flip()
+        next_side()
         time.sleep(0.15)                              # debounce the release
         prev = [btn.value for btn in flip_buttons]
     elif AUTO_FLIP_SECS > 0 and now - last_flip >= AUTO_FLIP_SECS:
-        flip()
+        next_side()
 
     # SW3 toggles the LEDs. Blanking them once on the edge is enough --
     # the strip holds its last frame, so the off state costs no further
